@@ -1,0 +1,16 @@
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: #efe6d0;
+  overflow: hidden;
+}
+
+/* Minimal utility shims for the few Tailwind-style classes the prototype uses */
+.flex { display: flex; }
+.items-center { align-items: center; }
+.gap-2 { gap: 0.5rem; }
