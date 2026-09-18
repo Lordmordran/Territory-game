@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
-  Trees, Mountain, Pickaxe, Wheat, Gem, Users, Home, Anchor, Shield, Flag, X, RotateCcw, LandPlot,
-  Swords, Hourglass, Trophy, Skull, ShieldCheck, Ship, Tent,
+  Trees, Mountain, Pickaxe, Wheat, Gem, Users, Home, Anchor, Flag, X, RotateCcw, LandPlot,
+  Swords, Hourglass, Trophy, Skull, Ship, Tent, Lock, Check, Map,
 } from "lucide-react";
 import { submitMatchTelemetry } from "./supabaseClient.js";
 
@@ -50,7 +50,6 @@ const CORE_MAX_HP = 100;
    Numbers are first-pass guesses, not final — the design doc calls exact
    balance an open question to tune once there's real match data. */
 const STEP_MS = 450;             // how long a sent army takes to cross one tile of its route
-const WALL_BREAK_COST = 3;       // power an attacker loses breaking through one wall — a speed bump, not a fight
 const AI_ATTACK_THRESHOLD = 30;  // total army power the AI wants before it commits
 const FIELD_DAMAGE_SCALE = 0.25; // overall core-damage multiplier — deliberately weak; a few troops shouldn't take a keep down
 
@@ -92,19 +91,6 @@ const BUILDING_DEFS = {
     cost: { wood: 30 }, buildMs: 6000, produces: { resource: "food", rate: 0.5 }, requiresWorker: true,
     icon: Anchor, desc: "Fishes the shallows. Must connect to your territory. +0.5 food/sec.",
   },
-  wall: {
-    id: "wall", name: "Wall", terrain: "land",
-    cost: { stone: 5 }, buildMs: 2000, defensive: true,
-    icon: Shield, desc: "Blocks enemy movement. Cheap, no upkeep. +6 defense.",
-  },
-  // `defensive: true` is the flag the AI (see pickAIBuildSpot) uses to reserve
-  // territory-edge tiles instead of interior ones.
-  antiSiege: {
-    id: "antiSiege", name: "Anti-Siege", terrain: "land",
-    cost: { stone: 20, iron: 10 }, buildMs: 6000, defensive: true,
-    icon: ShieldCheck, desc: "Not trainable — a structure. Cancels one attacking siege unit each.",
-  },
-
   // One barracks building, trainable for any troop type — which one is a
   // per-tile choice (tile.building.trains), not fixed by the def. Defaults to
   // Frontline on placement; click a built barracks to change it (see the
@@ -141,11 +127,6 @@ const UNIT_DEFS = {
     id: "raider", name: "Raider", hp: 15, power: 5,
     cost: { food: 8 }, trainMs: 4000,
     icon: HorseIcon, desc: "Fast and cheap, weakest one-on-one.",
-  },
-  siege: {
-    id: "siege", name: "Siege", hp: 25, power: 4, coreBonus: 25,
-    cost: { food: 15 }, trainMs: 9000,
-    icon: CannonIcon, desc: "Weak in the field, devastating vs the keep. Anti-Siege cancels it 1-for-1.",
   },
 };
 
@@ -227,9 +208,8 @@ function octile(r1, c1, r2, c2) {
   return Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy);
 }
 
-// Plain A*, 8-directional. `stepCost(tile)` lets some tiles be expensive
-// without being impassable (used to make walls "avoid me if you can").
-function aStarSearch(grid, start, end, isNavigable, stepCost) {
+// Plain A*, 8-directional.
+function aStarSearch(grid, start, end, isNavigable) {
   const [sr, sc] = start;
   const endKey = `${end[0]},${end[1]}`;
   const startKey = `${sr},${sc}`;
@@ -264,7 +244,7 @@ function aStarSearch(grid, start, end, isNavigable, stepCost) {
       const tile = grid[nr][nc];
       if (!isNavigable(tile)) continue;
       const diagonal = r !== nr && c !== nc;
-      const cost = (diagonal ? Math.SQRT2 : 1) * (stepCost ? stepCost(tile) : 1);
+      const cost = diagonal ? Math.SQRT2 : 1;
       const tentativeG = (gScore.get(curKey) ?? Infinity) + cost;
       if (tentativeG < (gScore.get(nKey) ?? Infinity)) {
         cameFrom.set(nKey, curKey);
@@ -277,22 +257,9 @@ function aStarSearch(grid, start, end, isNavigable, stepCost) {
   return null;
 }
 
-// Tries for a route that avoids `isSoftObstacle` tiles entirely first (a
-// clean detour); only if there's truly no way around does it search again
-// allowing them through at a steep cost penalty, and reports which ones the
-// chosen route actually crosses.
-function findPath(grid, start, end, isNavigable, isSoftObstacle) {
-  const clean = aStarSearch(
-    grid, start, end,
-    (t) => isNavigable(t) && !(isSoftObstacle && isSoftObstacle(t)),
-    null,
-  );
-  if (clean) return { path: clean, obstacles: [] };
-  if (!isSoftObstacle) return null;
-  const withSoft = aStarSearch(grid, start, end, isNavigable, (t) => (isSoftObstacle(t) ? 12 : 1));
-  if (!withSoft) return null;
-  const obstacles = withSoft.filter(([r, c]) => isSoftObstacle(grid[r][c]));
-  return { path: withSoft, obstacles };
+function findPath(grid, start, end, isNavigable) {
+  const path = aStarSearch(grid, start, end, isNavigable);
+  return path ? { path } : null;
 }
 
 // Breadth-first search outward from `from` for the closest tiles matching
@@ -323,8 +290,8 @@ function findCandidateTiles(grid, from, predicate, limit) {
 
 // The full journey for one side's attack: home keep -> nearest own shore ->
 // (sail, routing around any island in the way) -> nearest enemy shore ->
-// (march, routing around walls when possible, straight through everything
-// else) -> enemy flag. Returns null if genuinely no route exists.
+// (march straight to the flag, flattening any building in the way) ->
+// enemy flag. Returns null if genuinely no route exists.
 function computeAttackRoute(grid, attackerOwner) {
   const defenderOwner = attackerOwner === "player" ? "enemy" : "player";
   const homeCore = attackerOwner === "player" ? [TC_ROW, TC_COL] : [ENEMY_ROW, ENEMY_COL];
@@ -339,7 +306,6 @@ function computeAttackRoute(grid, attackerOwner) {
   const isShore = (t, r, c) => t.terrain === "water" && neighbors8(r, c).some(([nr, nc]) => grid[nr]?.[nc]?.terrain === "land");
   const isWater = (t) => t.terrain === "water";
   const isLand = (t) => t.terrain === "land";
-  const isWall = (t) => t.building?.defId === "wall";
 
   const dockCandidates = findCandidateTiles(grid, homeCore, isShore, 4);
   const landingWaterCandidates = findCandidateTiles(grid, enemyCore, isShore, 6);
@@ -355,10 +321,10 @@ function computeAttackRoute(grid, attackerOwner) {
   for (const dock of dockCandidates) {
     const embark = neighbors8(dock[0], dock[1]).find(([r, c]) => grid[r]?.[c]?.terrain === "land");
     if (!embark) continue;
-    const musterAttempt = findPath(grid, homeCore, embark, isLand, null);
+    const musterAttempt = findPath(grid, homeCore, embark, isLand);
     if (!musterAttempt) continue;
     for (const lw of landingWaterCandidates) {
-      const seaAttempt = findPath(grid, dock, lw, isWater, null);
+      const seaAttempt = findPath(grid, dock, lw, isWater);
       if (seaAttempt) { muster = musterAttempt; sea = seaAttempt; embarkPoint = embark; landingWater = lw; break outer; }
     }
   }
@@ -368,20 +334,19 @@ function computeAttackRoute(grid, attackerOwner) {
     .find(([r, c]) => grid[r]?.[c]?.terrain === "land");
   if (!landingSpot) return null;
 
-  const land = findPath(grid, landingSpot, enemyCore, isLand, isWall);
+  const land = findPath(grid, landingSpot, enemyCore, isLand);
   if (!land) return null;
 
   const route = [...muster.path, ...sea.path, ...land.path];
   const legBreak = muster.path.length + sea.path.length; // index in `route` where the enemy land leg begins
-  const wallTiles = new Set(land.obstacles.map(([r, c]) => `${r},${c}`));
   const buildingTiles = new Set();
   for (const [r, c] of land.path) {
     const t = grid[r][c];
     const isFlag = r === enemyCore[0] && c === enemyCore[1];
-    if (t.building && !isFlag && t.building.defId !== "wall") buildingTiles.add(`${r},${c}`);
+    if (t.building && !isFlag) buildingTiles.add(`${r},${c}`);
   }
 
-  return { route, legBreak, wallTiles, buildingTiles };
+  return { route, legBreak, buildingTiles };
 }
 
 function clearBuildingAt(grid, r, c) {
@@ -482,10 +447,8 @@ function pickRandom(set) {
 
 // Claim compactly — the tile touching the most already-claimed neighbours —
 // instead of a random point on the frontier. Purely random claiming spreads
-// thin along the whole border and never actually encloses anything, so an
-// "interior" (see isEdgeTile below) never forms for pickAIBuildSpot to use.
-// Greedily filling in the most-surrounded gaps first grows territory as a
-// solid blob, which does form one.
+// thin along the whole border and leaves territory full of gaps; greedily
+// filling in the most-surrounded ones first grows it as a solid blob instead.
 function pickClaimSpot(grid, owner, claimSpots) {
   let best = [], bestScore = -1;
   for (const key of claimSpots) {
@@ -505,6 +468,13 @@ const AI_TICK_MS = 1600;             // how often the AI reconsiders its next mo
 const AI_CATCHUP_TICK_MS = 500;      // ...and how often while behind the player's own historical pace (see aiTargetsRef)
 const AI_CLAIM_GROWTH_CHANCE = 0.3;  // chance it grabs land even when it could build instead
 const AI_CLAIM_WOOD_BUFFER = CLAIM_COST * 3; // wood it likes to keep in reserve before "just growing"
+// A barracks running flat out eats ~1.9 food/sec on average across the 4
+// troop types (cost/trainMs) but one fishery only makes 0.5/sec — so several
+// fisheries per barracks are needed just to keep training at a decent clip,
+// not merely to avoid outright stalling. 5 was verified by simulation
+// (see combat-system memory) to keep a barracks fed near its own pace
+// instead of leaving it mostly idle waiting on food.
+const AI_FISHERY_PER_BARRACKS = 5;
 // Fallback targets for a brand-new player profile (no match history yet) —
 // same numbers the AI used unconditionally before this existed.
 const DEFAULT_TARGET_FIRST_BARRACKS_MS = 180000; // 3 minutes
@@ -528,7 +498,7 @@ function countAIBuildings(grid) {
 // type — since barracks are now one generic building, "how many do I have of
 // X" is a per-tile trains-assignment tally, not a building-def count.
 function countAITrainsAssignments(grid) {
-  const counts = { tank: 0, archer: 0, raider: 0, siege: 0 };
+  const counts = { tank: 0, archer: 0, raider: 0 };
   for (const row of grid) for (const tile of row) {
     if (tile.owner === "enemy" && tile.building?.defId === "barracks" && tile.building.trains) {
       counts[tile.building.trains] += 1;
@@ -537,36 +507,15 @@ function countAITrainsAssignments(grid) {
   return counts;
 }
 
-// Balance across the 4 troop types: whichever has the fewest barracks
+// Balance across the 3 troop types: whichever has the fewest barracks
 // assigned to it gets the next one.
 function pickAITrainType(trainsCounts) {
-  const order = ["tank", "archer", "raider", "siege"];
+  const order = ["tank", "archer", "raider"];
   return order.reduce((a, b) => (trainsCounts[a] ?? 0) <= (trainsCounts[b] ?? 0) ? a : b);
 }
 
-// A tile is the "edge" of an owner's territory if any of its 8 neighbours
-// (including off the edge of the map) ISN'T also that owner's — i.e. it faces
-// water, unclaimed land, or the enemy. Anything fully boxed in by your own
-// territory is "interior".
-function isEdgeTile(grid, owner, r, c) {
-  return neighbors8(r, c).some(([nr, nc]) => grid[nr]?.[nc]?.owner !== owner);
-}
-
-// Where the AI should put a building of this type: defensive structures
-// (walls, and eventually anti-siege — anything with `defensive: true`) want
-// the outer edge so they actually block approach; everything else prefers the
-// interior so it doesn't box out room for defenses later. Falls back to
-// whatever's available if its preferred kind of tile doesn't exist yet (e.g.
-// there's no interior at all early on, before any land has been fully
-// surrounded).
-function pickAIBuildSpot(grid, owner, def, spots) {
-  const edge = [], interior = [];
-  for (const key of spots) {
-    const [r, c] = keyToRC(key);
-    (isEdgeTile(grid, owner, r, c) ? edge : interior).push(key);
-  }
-  const preferred = def.defensive ? edge : interior;
-  const pool = preferred.length > 0 ? preferred : Array.from(spots);
+function pickAIBuildSpot(spots) {
+  const pool = Array.from(spots);
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
@@ -575,9 +524,10 @@ function pickAIBuildSpot(grid, owner, def, spots) {
 // AND all claiming, so a single camp starves the rest of the build order),
 // get a basic economy (2 of each gatherer) going, then get a first barracks
 // up early rather than dead last — so it isn't sitting on economy for
-// minutes before it can field anything — then round the economy out, add
-// defenses, then more barracks (one per troop type it still lacks) + the
-// anti-siege counter.
+// minutes before it can field anything — then round the economy out, then
+// keep growing barracks and the fisheries that feed them in step with the
+// core economy for the rest of the match, instead of hard-capping either
+// and leaving the rest of the growth with nothing productive to do.
 function pickAIBuilding(counts, popCap, popUsed) {
   if (popUsed >= popCap - 1) return "house";
   if ((counts.lumberCamp ?? 0) < 2) return "lumberCamp";
@@ -587,15 +537,19 @@ function pickAIBuilding(counts, popCap, popUsed) {
   if ((counts.barracks ?? 0) < 1) return "barracks";
   if ((counts[lowest] ?? 0) < 3) return lowest;
   if ((counts.fishery ?? 0) < 1) return "fishery";
-  if ((counts.wall ?? 0) < 1) return "wall";
-  if ((counts.barracks ?? 0) < 4) return "barracks"; // one per troop type, roughly
-  if ((counts.wall ?? 0) < 2) return "wall";
-  if ((counts.antiSiege ?? 0) < 1) return "antiSiege";
-  // Keep growing: food feeds every barracks at once (there's no iron cost on
-  // troops anymore — see UNIT_DEFS), so keep fisheries scaling 1:1 with the
-  // rest of the economy or four barracks quickly outrun what one can supply.
-  if ((counts.fishery ?? 0) < (counts[lowest] ?? 0)) return "fishery";
-  return lowest; // basics covered — keep growing the economy
+
+  // No more fixed cap from here on — barracks and the fisheries that feed
+  // them keep growing in proportion to the core economy for as long as the
+  // match runs, instead of plateauing while the rest of the economy (and
+  // its wood/stone/iron) has nothing left to spend on. Fishery comes first
+  // each round: a barracks with nothing to feed it just sits mostly idle
+  // waiting on food (see UNIT_DEFS — troops are food-only), so it's not
+  // worth adding another one until the existing ones can actually train at
+  // a decent clip.
+  const barracksCount = counts.barracks ?? 0;
+  if ((counts.fishery ?? 0) < barracksCount * AI_FISHERY_PER_BARRACKS) return "fishery";
+  if (barracksCount < Math.ceil((counts[lowest] ?? 0) / 2)) return "barracks";
+  return lowest; // basics + military covered this round — keep growing the economy
 }
 
 // Pure decision function: given the current board + the AI's own resources,
@@ -618,7 +572,7 @@ function decideAIAction(grid, resources, catchingUp) {
   const spots = computeValidTiles(grid, "enemy", defId);
   const affordable = Object.entries(def.cost).every(([res, amt]) => resources[res] >= amt);
   if (affordable && spots.size > 0) {
-    const [r, c] = keyToRC(pickAIBuildSpot(grid, "enemy", def, spots));
+    const [r, c] = keyToRC(pickAIBuildSpot(spots));
     const trains = def.trainable ? pickAITrainType(countAITrainsAssignments(grid)) : undefined;
     return { type: "build", defId, trains, r, c };
   }
@@ -637,14 +591,13 @@ function decideAIAction(grid, resources, catchingUp) {
 /* Combat — armies are a per-side pool of trained units, not tied to a     */
 /* tile. Sending an attack empties the pool, plots a route (computeAttack- */
 /* Route above), and marches it: a defending garrison must be beaten at    */
-/* the landing before anything else happens; walls along the way to the   */
-/* flag get fought through (or routed around, if there's a clear detour);  */
-/* other buildings are just destroyed in passing. See the game tick's      */
+/* the landing before anything else happens; every other building along    */
+/* the way to the flag is just destroyed in passing. See the game tick's   */
 /* attack-stepping effects for how a route actually gets walked.           */
 /* ---------------------------------------------------------------------- */
 
 function zeroArmy() {
-  return { tank: 0, archer: 0, raider: 0, siege: 0 };
+  return { tank: 0, archer: 0, raider: 0 };
 }
 
 function armyPower(army) {
@@ -658,31 +611,15 @@ function armyTotal(army) {
 }
 
 // The landing clash: whichever side has more raw army power holds the beach.
-// No wall/anti-siege bonus here — those matter later, for the march and the
-// final assault respectively — this is purely "do you have enough army".
 function armyClashWon(attackerArmy, defenderArmy) {
   return armyPower(attackerArmy) > armyPower(defenderArmy);
 }
 
 // Damage dealt when the march reaches the flag, from whatever the attacker
-// has left: `powerPenalty` is the accumulated cost of any walls broken
-// through along the way (see WALL_BREAK_COST). Anti-siege cancels attacking
-// siege units one-for-one (their field power AND their bonus core damage) —
-// "siege beats buildings, anti-siege beats siege" from the design doc, kept
-// literal rather than a vague percentage. FIELD_DAMAGE_SCALE is applied to
-// the whole thing (power AND the siege core-bonus together) — it used to
-// only scale power, which meant a single siege unit's flat bonus alone could
-// gut the keep regardless of how weak the rest of the scale was tuned; a
-// small handful of troops shouldn't be able to take a keep down at all.
-function finalAssaultDamage(army, defenderAntiSiege, powerPenalty) {
-  const effectiveSiege = army.siege - Math.min(army.siege, defenderAntiSiege);
-  const rawPower =
-    army.tank * UNIT_DEFS.tank.power +
-    army.archer * UNIT_DEFS.archer.power +
-    army.raider * UNIT_DEFS.raider.power +
-    effectiveSiege * UNIT_DEFS.siege.power;
-  const power = Math.max(0, rawPower - powerPenalty);
-  return Math.round((power + effectiveSiege * UNIT_DEFS.siege.coreBonus) * FIELD_DAMAGE_SCALE);
+// has left. FIELD_DAMAGE_SCALE is deliberately weak — a small handful of
+// troops shouldn't be able to take a keep down at all.
+function finalAssaultDamage(army) {
+  return Math.round(armyPower(army) * FIELD_DAMAGE_SCALE);
 }
 
 // Opportunistic, per the design doc: attack once there's "enough saved up" for
@@ -702,7 +639,13 @@ function shouldAIAttack(army, threshold = AI_ATTACK_THRESHOLD) {
 /* just keeps marching from where it was, nothing "catches up" instantly.  */
 /* ---------------------------------------------------------------------- */
 
-const SAVE_KEY = "territory-game-save-v1";
+// Bumped to v2 2026-09-17: wall/anti-siege buildings and the siege unit were
+// removed. A v1 save could still reference those defIds (a wall tile, an
+// antiSiege count, a nonzero armies.*.siege) — those defs no longer exist in
+// BUILDING_DEFS/UNIT_DEFS, so reading an old save back in would crash rather
+// than just render wrong. Bumping the key makes loadSavedMatch() simply miss
+// and fall back to a fresh match instead, per the persistence convention.
+const SAVE_KEY = "territory-game-save-v2";
 let cachedSave; // memoized so mount-time lazy initializers don't each re-parse it
 
 function loadSavedMatch() {
@@ -804,6 +747,48 @@ function recordNewMatchStarted() {
 }
 
 /* ---------------------------------------------------------------------- */
+/* Level progress — a simple linear campaign shown on the home screen.     */
+/* Every level plays identically for now (same AI heuristic, same random   */
+/* map generation) — this is purely a progression/unlock wrapper around    */
+/* the existing single match type, not a per-level difficulty or map       */
+/* system yet. Tyler's explicit call: add the map/levels first, tune       */
+/* per-level difficulty later.                                             */
+/* ---------------------------------------------------------------------- */
+const LEVELS_KEY = "territory-game-levels-v1";
+const LEVEL_COUNT = 5;
+
+function emptyLevelProgress() {
+  return { unlocked: 1 }; // highest level the player can currently play
+}
+
+function loadLevelProgress() {
+  try {
+    const raw = localStorage.getItem(LEVELS_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? { ...emptyLevelProgress(), ...parsed } : emptyLevelProgress();
+  } catch {
+    return emptyLevelProgress();
+  }
+}
+
+function saveLevelProgress(progress) {
+  try {
+    localStorage.setItem(LEVELS_KEY, JSON.stringify(progress));
+  } catch {
+    // not worth crashing over, same as the match/profile saves above
+  }
+}
+
+// Only advances `unlocked` if the level just won WAS the current frontier —
+// replaying an already-cleared level can't skip further ahead than one.
+function recordLevelWon(level) {
+  const progress = loadLevelProgress();
+  if (level >= progress.unlocked && progress.unlocked < LEVEL_COUNT) {
+    saveLevelProgress({ ...progress, unlocked: Math.min(LEVEL_COUNT, level + 1) });
+  }
+}
+
+/* ---------------------------------------------------------------------- */
 /* Small presentational pieces                                            */
 /* ---------------------------------------------------------------------- */
 
@@ -886,9 +871,9 @@ function tilePixelPos(r, c, tileSize) {
   return { left: GRID_BORDER + c * (tileSize + GRID_GAP), top: GRID_BORDER + r * (tileSize + GRID_GAP) };
 }
 
-/* Unit icons — lucide doesn't have a spear/bow/cavalry/cannon, so these are
-   small flat inline shapes instead, matching the same plain-silhouette style
-   as BoatIcon below. Same size/color/strokeWidth props as a lucide icon so
+/* Unit icons — lucide doesn't have a spear/bow/cavalry, so these are small
+   flat inline shapes instead, matching the same plain-silhouette style as
+   BoatIcon below. Same size/color/strokeWidth props as a lucide icon so
    they drop straight into the existing call sites (strokeWidth is unused,
    just harmlessly ignored). */
 
@@ -924,16 +909,6 @@ function HorseIcon({ size, color }) {
       <path d="M15 13 L20 6 L21.5 7 L18 14 Z" />
       <rect x="9.5" y="8" width="2.4" height="6" rx="1" />
       <circle cx="10.7" cy="6.5" r="1.6" />
-    </svg>
-  );
-}
-
-function CannonIcon({ size, color }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
-      <rect x="4" y="10" width="14" height="5" rx="2.5" transform="rotate(-15 11 12.5)" />
-      <rect x="7" y="14" width="5" height="3" />
-      <circle cx="8" cy="18" r="3.5" fill="none" stroke={color} strokeWidth="1.8" />
     </svg>
   );
 }
@@ -1055,7 +1030,7 @@ function ToolbarButton({ icon: Icon, label, cost, active, affordable, onClick, t
 /* Main component                                                         */
 /* ---------------------------------------------------------------------- */
 
-function Match() {
+function Match({ level, onExit }) {
   const [grid, setGrid] = useState(() => loadSavedMatch()?.grid ?? buildInitialGrid());
   const [resources, setResources] = useState(() => loadSavedMatch()?.resources ?? START_RESOURCES);
   const [aiResources, setAiResources] = useState(() => loadSavedMatch()?.aiResources ?? START_RESOURCES); // AI gets no special exceptions
@@ -1088,6 +1063,14 @@ function Match() {
   const [firstBarracksMs, setFirstBarracksMs] = useState(() => loadSavedMatch()?.firstBarracksMs ?? null);
   const [firstAttackMs, setFirstAttackMs] = useState(() => loadSavedMatch()?.firstAttackMs ?? null);
   const [firstAttackPower, setFirstAttackPower] = useState(() => loadSavedMatch()?.firstAttackPower ?? null);
+
+  // Every successful player placement this match (builds AND claims), not
+  // just the three milestones above — a ref, not state: it only needs to be
+  // read at autosave/match-end, never drives a render on its own, and a ref
+  // avoids reconstructing the whole array (and re-rendering) on every single
+  // click. `{ t, kind, defId, r, c }[]`; t is ms since matchStart, so it's
+  // comparable across matches regardless of wall-clock time.
+  const buildLogRef = useRef(loadSavedMatch()?.buildLog ?? []);
 
   // Which of your own barracks currently has its troop-type picker open.
   const [barracksMenu, setBarracksMenu] = useState(null); // { r, c } | null
@@ -1147,6 +1130,7 @@ function Match() {
     saveSnapshotRef.current = {
       grid, resources, aiResources, phase, matchStart, coreHp, endedAt,
       armies, playerAttack, enemyAttack, firstBarracksMs, firstAttackMs, firstAttackPower,
+      buildLog: buildLogRef.current, level,
     };
   });
 
@@ -1227,6 +1211,7 @@ function Match() {
       const endedAt = Date.now();
       setPhase(outcome);
       setEndedAt(endedAt);
+      if (outcome === "won") recordLevelWon(level);
       // anonymous, best-effort — see supabaseClient.js. Fires exactly once
       // per match, right here, since this whole branch only runs the one
       // tick `over` actually flips (the guard above skips every run after).
@@ -1236,10 +1221,11 @@ function Match() {
         first_barracks_ms: firstBarracksMs,
         first_attack_ms: firstAttackMs,
         first_attack_power: firstAttackPower,
+        build_log: buildLogRef.current,
         app_version: APP_VERSION,
       });
     }
-  }, [coreHp, over, matchStart, firstBarracksMs, firstAttackMs, firstAttackPower]);
+  }, [coreHp, over, matchStart, firstBarracksMs, firstAttackMs, firstAttackPower, level]);
 
   const damageCore = useCallback((side, amount) => {
     setCoreHp((p) => ({ ...p, [side]: Math.max(0, p[side] - amount) }));
@@ -1296,8 +1282,8 @@ function Match() {
       // Barracks that have been ready-but-unaffordable the longest go first —
       // several barracks (each set to train something different) share one
       // food pool, and without this a cheap, frequent unit (raider) always
-      // wins the race over a rare, expensive one (siege) even though both are
-      // "due". trainReadyAt only moves forward on a successful buy, so the
+      // wins the race over a pricier one (tank) even though both are "due".
+      // trainReadyAt only moves forward on a successful buy, so the
       // longest-stalled one sorts first and gets served the instant there's
       // enough to go around.
       readyToTrain.sort((a, b) => nextGrid[a[0]][a[1]].building.trainReadyAt - nextGrid[b[0]][b[1]].building.trainReadyAt);
@@ -1408,18 +1394,6 @@ function Match() {
     [selectedTool, grid],
   );
 
-  // Active anti-siege counts per side, for the final-assault damage calc.
-  // (Walls no longer need a tally here — the march fights through them
-  // individually, tile by tile, via the attack route's own wallTiles set.)
-  const antiSiegeCounts = useMemo(() => {
-    const counts = { player: 0, enemy: 0 };
-    for (const row of grid) for (const t of row) {
-      if ((t.owner !== "player" && t.owner !== "enemy") || t.building?.status !== "active") continue;
-      if (t.building.defId === "antiSiege") counts[t.owner] += 1;
-    }
-    return counts;
-  }, [grid]);
-
   /* ---- handlers ---- */
   function handleTileClick(r, c) {
     if (!selectedTool) return;
@@ -1437,6 +1411,7 @@ function Match() {
       if (resources.wood < CLAIM_COST) return flash("Not enough wood to claim this land.");
       setResources((p) => ({ ...p, wood: p.wood - CLAIM_COST }));
       setGrid((prev) => withClaimedTile(prev, r, c, "player"));
+      buildLogRef.current.push({ t: Date.now() - matchStart, kind: "claim", defId: null, r, c });
       flash("Land claimed.", "success");
       return;
     }
@@ -1455,6 +1430,7 @@ function Match() {
       return next;
     });
     setGrid((prev) => withBuiltTile(prev, r, c, "player", def, def.trainable ? "tank" : undefined));
+    buildLogRef.current.push({ t: Date.now() - matchStart, kind: "build", defId: selectedTool, r, c });
     flash(`${def.name} under construction.`, "success");
   }
 
@@ -1474,23 +1450,22 @@ function Match() {
       setFirstAttackPower(power);
     }
     setArmies((p) => ({ ...p, player: zeroArmy() }));
-    setPlayerAttack({ army: armies.player, ...route, stepIndex: 0, powerPenalty: 0, nextStepAt: clock + STEP_MS });
+    setPlayerAttack({ army: armies.player, ...route, stepIndex: 0, nextStepAt: clock + STEP_MS });
     flash("Your army sets out across the water...", "success");
   }
 
   // Walks one attack's route forward by one step per tick: muster to the
   // dock, sail (routed around any island in the way), land — clashing with
   // the defender's standing army first if it has one, the only real win/lose
-  // gate — then march to the flag, breaking through any wall along the way
-  // (or going around it, if the route already found a clear detour) and
-  // flattening any other building it happens to cross, finally dealing
-  // damage from whatever's left once it reaches the flag. Shared by both
-  // directions — `owner`/`enemyOwner` just pick which side is attacking.
-  function stepAttack(attack, setAttack, owner, enemyOwner, enemyArmy, enemyAntiSiege) {
+  // gate — then march to the flag, flattening any building it happens to
+  // cross, finally dealing damage from whatever's left once it reaches the
+  // flag. Shared by both directions — `owner`/`enemyOwner` just pick which
+  // side is attacking.
+  function stepAttack(attack, setAttack, owner, enemyOwner, enemyArmy) {
     const nextIndex = attack.stepIndex + 1;
 
     if (nextIndex >= attack.route.length) {
-      const coreDamage = finalAssaultDamage(attack.army, enemyAntiSiege, attack.powerPenalty);
+      const coreDamage = finalAssaultDamage(attack.army);
       damageCore(enemyOwner, coreDamage);
       flash(`${owner === "player" ? "Your" : "The enemy's"} army reaches the flag — ${coreDamage} damage to the keep!`, owner === "player" ? "success" : "error");
       setAttack(null);
@@ -1520,26 +1495,22 @@ function Match() {
     const [r, c] = attack.route[nextIndex];
     const posKey = `${r},${c}`;
     const onEnemyLand = nextIndex >= attack.legBreak;
-    let powerPenalty = attack.powerPenalty;
-    if (onEnemyLand && attack.wallTiles.has(posKey)) {
-      powerPenalty += WALL_BREAK_COST;
-      setGrid((prev) => clearBuildingAt(prev, r, c));
-    } else if (onEnemyLand && attack.buildingTiles.has(posKey)) {
+    if (onEnemyLand && attack.buildingTiles.has(posKey)) {
       setGrid((prev) => clearBuildingAt(prev, r, c));
     }
 
-    setAttack({ ...attack, stepIndex: nextIndex, powerPenalty, nextStepAt: clock + STEP_MS });
+    setAttack({ ...attack, stepIndex: nextIndex, nextStepAt: clock + STEP_MS });
   }
 
   useEffect(() => {
     if (over || !playerAttack || clock < playerAttack.nextStepAt) return;
-    stepAttack(playerAttack, setPlayerAttack, "player", "enemy", armies.enemy, antiSiegeCounts.enemy);
-  }, [clock, playerAttack, armies.enemy, antiSiegeCounts.enemy, over]);
+    stepAttack(playerAttack, setPlayerAttack, "player", "enemy", armies.enemy);
+  }, [clock, playerAttack, armies.enemy, over]);
 
   useEffect(() => {
     if (over || !enemyAttack || clock < enemyAttack.nextStepAt) return;
-    stepAttack(enemyAttack, setEnemyAttack, "enemy", "player", armies.player, antiSiegeCounts.player);
-  }, [clock, enemyAttack, armies.player, antiSiegeCounts.player, over]);
+    stepAttack(enemyAttack, setEnemyAttack, "enemy", "player", armies.player);
+  }, [clock, enemyAttack, armies.player, over]);
 
   // The AI's own decision to attack: opportunistic, once its army is "good
   // enough" (see shouldAIAttack) — not on a timer or a wave schedule. The
@@ -1551,7 +1522,7 @@ function Match() {
     const route = computeAttackRoute(gridRef.current, "enemy");
     if (!route) return;
     setArmies((p) => ({ ...p, enemy: zeroArmy() }));
-    setEnemyAttack({ army: armies.enemy, ...route, stepIndex: 0, powerPenalty: 0, nextStepAt: clock + STEP_MS });
+    setEnemyAttack({ army: armies.enemy, ...route, stepIndex: 0, nextStepAt: clock + STEP_MS });
     flash("Enemy forces are on the move!");
   }, [clock, armies.enemy, enemyAttack, phase, over, flash]);
 
@@ -1570,7 +1541,10 @@ function Match() {
       firstBarracksMs: null,
       firstAttackMs: null,
       firstAttackPower: null,
+      buildLog: [],
+      level,
     };
+    buildLogRef.current = fresh.buildLog;
     setGrid(fresh.grid);
     setResources(fresh.resources);
     setAiResources(fresh.aiResources);
@@ -1799,8 +1773,9 @@ function Match() {
 
       {/* Top-left: title + your keep */}
       <div style={{ position: "absolute", top: 10, left: 12, display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start" }}>
-        <div style={{ ...CHIP, pointerEvents: "none", padding: "5px 11px" }}>
+        <div style={{ ...CHIP, pointerEvents: "none", padding: "5px 11px", display: "flex", alignItems: "baseline", gap: 6 }}>
           <span style={{ fontFamily: SERIF, fontSize: 15, fontWeight: 600, color: INK }}>Territory &amp; Economy</span>
+          <span style={{ fontSize: 10.5, fontWeight: 600, color: INK_MUTED }}>Level {level}</span>
         </div>
         <CoreBar label="Your keep" hp={coreHp.player} color={CLAIM_EDGE} align="left" />
         {enemyAttack && (
@@ -1813,17 +1788,28 @@ function Match() {
         )}
       </div>
 
-      {/* Top-right: new match + enemy keep */}
+      {/* Top-right: level map + new match + enemy keep */}
       <div style={{ position: "absolute", top: 10, right: 12, display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
-        <button
-          onClick={newMatch}
-          style={{
-            ...CHIP, display: "flex", alignItems: "center", gap: 6,
-            fontSize: 11.5, color: INK, padding: "6px 10px", cursor: "pointer", fontFamily: SANS,
-          }}
-        >
-          <RotateCcw size={12} /> New match
-        </button>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button
+            onClick={onExit}
+            style={{
+              ...CHIP, display: "flex", alignItems: "center", gap: 6,
+              fontSize: 11.5, color: INK, padding: "6px 10px", cursor: "pointer", fontFamily: SANS,
+            }}
+          >
+            <Map size={12} /> Level map
+          </button>
+          <button
+            onClick={newMatch}
+            style={{
+              ...CHIP, display: "flex", alignItems: "center", gap: 6,
+              fontSize: 11.5, color: INK, padding: "6px 10px", cursor: "pointer", fontFamily: SANS,
+            }}
+          >
+            <RotateCcw size={12} /> New match
+          </button>
+        </div>
         <CoreBar label="Enemy keep" hp={coreHp.enemy} color={RUST} align="right" />
         {playerAttack && (
           <div style={{ ...CHIP, pointerEvents: "none", display: "flex", alignItems: "center", gap: 5, padding: "4px 9px", color: CLAIM_EDGE }}>
@@ -1981,17 +1967,35 @@ function Match() {
                 : "Your keep has fallen."}
               <br />
               Match length {fmtClock((endedAt ?? Date.now()) - matchStart)}
+              {phase === "won" && level < LEVEL_COUNT && (
+                <>
+                  <br />
+                  <span style={{ color: FOREST, fontWeight: 600 }}>Level {level + 1} unlocked!</span>
+                </>
+              )}
             </div>
-            <button
-              onClick={newMatch}
-              style={{
-                ...CHIP, marginTop: 4, display: "flex", alignItems: "center", gap: 6,
-                fontSize: 12.5, fontWeight: 600, color: INK, padding: "8px 16px",
-                cursor: "pointer", fontFamily: SANS,
-              }}
-            >
-              <RotateCcw size={13} /> New match
-            </button>
+            <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+              <button
+                onClick={onExit}
+                style={{
+                  ...CHIP, display: "flex", alignItems: "center", gap: 6,
+                  fontSize: 12.5, fontWeight: 600, color: INK, padding: "8px 16px",
+                  cursor: "pointer", fontFamily: SANS,
+                }}
+              >
+                <Map size={13} /> Level map
+              </button>
+              <button
+                onClick={newMatch}
+                style={{
+                  ...CHIP, display: "flex", alignItems: "center", gap: 6,
+                  fontSize: 12.5, fontWeight: 600, color: INK, padding: "8px 16px",
+                  cursor: "pointer", fontFamily: SANS,
+                }}
+              >
+                <RotateCcw size={13} /> New match
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -2017,6 +2021,10 @@ function HomeScreen({ savedMatch, onStart, onContinue }) {
   const profile = loadPlayerProfile();
   const hasStats = profile.matchesPlayed > 0;
   const savedPhase = savedMatch?.phase;
+  const levelProgress = loadLevelProgress();
+  const savedLevel = savedMatch?.level ?? null;
+  const [selectedLevel, setSelectedLevel] = useState(savedLevel ?? levelProgress.unlocked);
+  const isSavedLevel = savedMatch != null && selectedLevel === savedLevel;
 
   return (
     <div style={{
@@ -2059,15 +2067,57 @@ function HomeScreen({ savedMatch, onStart, onContinue }) {
           </div>
         )}
 
+        {/* Campaign map — a simple winding trail of level nodes. Every level
+            plays identically right now (same AI, same random map) — this is
+            just the progression/unlock layer; per-level tuning comes later. */}
+        <div style={{ width: "100%", textAlign: "left" }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: INK, marginBottom: 10, letterSpacing: 0.02 }}>
+            Campaign
+          </div>
+          <div style={{ position: "relative", display: "flex", flexDirection: "column", gap: 12, padding: "4px 0" }}>
+            <div style={{
+              position: "absolute", left: "50%", top: 4, bottom: 4, width: 2,
+              background: PANEL_BORDER, transform: "translateX(-1px)", zIndex: 0,
+            }} />
+            {Array.from({ length: LEVEL_COUNT }, (_, i) => i + 1).map((lvl) => {
+              const locked = lvl > levelProgress.unlocked;
+              const completed = lvl < levelProgress.unlocked;
+              const isSelected = lvl === selectedLevel;
+              const alignRight = lvl % 2 === 0;
+              return (
+                <div key={lvl} style={{ display: "flex", justifyContent: alignRight ? "flex-end" : "flex-start", zIndex: 1 }}>
+                  <button
+                    onClick={() => !locked && setSelectedLevel(lvl)}
+                    disabled={locked}
+                    title={locked ? "Beat the previous level to unlock" : `Level ${lvl}`}
+                    style={{
+                      width: 44, height: 44, borderRadius: "50%",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      border: `2px solid ${locked ? PANEL_BORDER : isSelected ? CLAIM_EDGE : completed ? FOREST : PANEL_BORDER}`,
+                      background: locked ? PANEL_BG : isSelected ? CLAIM_TINT : completed ? "rgba(76,107,62,0.14)" : PANEL_BG,
+                      color: locked ? INK_MUTED : completed ? FOREST : INK,
+                      cursor: locked ? "not-allowed" : "pointer",
+                      fontFamily: SERIF, fontWeight: 600, fontSize: 15,
+                      boxShadow: isSelected ? "0 0 0 3px rgba(193,120,23,0.18)" : "none",
+                    }}
+                  >
+                    {locked ? <Lock size={15} /> : completed ? <Check size={18} /> : lvl}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         <div style={{ display: "flex", flexDirection: "column", gap: 8, width: "100%" }}>
-          {savedMatch && (
+          {isSavedLevel && (
             <button onClick={onContinue} style={homeButtonStyle(true)}>
-              Continue match
+              Continue Level {selectedLevel}
               {savedPhase === "won" ? " — victory!" : savedPhase === "lost" ? " — defeat" : ""}
             </button>
           )}
-          <button onClick={onStart} style={homeButtonStyle(!savedMatch)}>
-            {savedMatch ? "New match" : "Start"}
+          <button onClick={() => onStart(selectedLevel)} style={homeButtonStyle(!isSavedLevel)}>
+            {isSavedLevel ? "Restart level" : `Start Level ${selectedLevel}`}
           </button>
         </div>
 
@@ -2090,17 +2140,19 @@ function HomeScreen({ savedMatch, onStart, onContinue }) {
 export default function TerritoryPrototype() {
   const [screen, setScreen] = useState("home");
   const savedMatch = loadSavedMatch();
+  const [level, setLevel] = useState(() => savedMatch?.level ?? loadLevelProgress().unlocked);
 
-  function handleStart() {
+  function handleStart(chosenLevel) {
     const activeMatch = savedMatch && savedMatch.phase !== "won" && savedMatch.phase !== "lost";
     if (activeMatch && !window.confirm("Start a new match? This will erase your current one.")) return;
     clearSavedMatch();
     recordNewMatchStarted();
+    setLevel(chosenLevel);
     setScreen("game");
   }
 
   if (screen === "home") {
     return <HomeScreen savedMatch={savedMatch} onStart={handleStart} onContinue={() => setScreen("game")} />;
   }
-  return <Match />;
+  return <Match level={level} onExit={() => setScreen("home")} />;
 }

@@ -13,6 +13,15 @@ create table if not exists public.matches (
   app_version text
 );
 
+-- Added later: every successful placement the player made that match (builds
+-- AND land claims), not just the three summary milestones above — one JSON
+-- array per match, e.g. [{"t": 4210, "kind": "build", "defId": "lumberCamp",
+-- "r": 15, "c": 6}, {"t": 8900, "kind": "claim", "defId": null, "r": 15, "c": 7}, ...].
+-- `t` is ms since that match's own start, so it's comparable across matches
+-- regardless of wall-clock time. `if not exists` makes this safe to re-run
+-- alongside the rest of this file.
+alter table public.matches add column if not exists build_log jsonb;
+
 alter table public.matches enable row level security;
 
 -- The client only ever needs to INSERT a row when a match ends. It should
