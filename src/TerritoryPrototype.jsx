@@ -1897,25 +1897,39 @@ function Match({ level, onExit }) {
           {Object.keys(UNIT_DEFS).map((unitId) => (
             <ArmyPill key={unitId} unitId={unitId} count={armies.player[unitId]} />
           ))}
-          <button
-            onClick={launchAttack}
-            disabled={phase !== "battle" || !!playerAttack || armyTotal(armies.player) === 0}
-            title={
+          {(() => {
+            const attackBlockedReason =
               phase !== "battle" ? "Combat is locked until the build phase ends"
               : playerAttack ? "Your army is already en route"
               : armyTotal(armies.player) === 0 ? "Train some troops first — build a barracks"
-              : "Send your whole army at the enemy keep"
-            }
-            style={{
-              display: "flex", alignItems: "center", gap: 6,
-              background: RUST, color: "#FBF6E8", border: "none", borderRadius: 8,
-              padding: "6px 12px", fontFamily: SANS, fontSize: 11.5, fontWeight: 600,
-              cursor: phase === "battle" && !playerAttack && armyTotal(armies.player) > 0 ? "pointer" : "not-allowed",
-              opacity: phase === "battle" && !playerAttack && armyTotal(armies.player) > 0 ? 1 : 0.4,
-            }}
-          >
-            <Ship size={13} strokeWidth={2.25} /> Attack
-          </button>
+              : null;
+            return (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                <button
+                  onClick={launchAttack}
+                  disabled={!!attackBlockedReason}
+                  title={attackBlockedReason ?? "Send your whole army at the enemy keep"}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 6,
+                    background: RUST, color: "#FBF6E8", border: "none", borderRadius: 8,
+                    padding: "6px 12px", fontFamily: SANS, fontSize: 11.5, fontWeight: 600,
+                    cursor: attackBlockedReason ? "not-allowed" : "pointer",
+                    opacity: attackBlockedReason ? 0.4 : 1,
+                  }}
+                >
+                  <Ship size={13} strokeWidth={2.25} /> Attack
+                </button>
+                {/* Always-visible reason, not just a hover title — a title tooltip
+                    never shows on a trackpad/touch device, so a disabled button
+                    otherwise just looks broken with no explanation at all. */}
+                {attackBlockedReason && (
+                  <span style={{ fontSize: 9, color: INK_MUTED, maxWidth: 110, textAlign: "center", lineHeight: 1.25 }}>
+                    {attackBlockedReason}
+                  </span>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {/* tools */}
