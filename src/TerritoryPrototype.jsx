@@ -339,11 +339,15 @@ function computeAttackRoute(grid, attackerOwner) {
 
   const route = [...muster.path, ...sea.path, ...land.path];
   const legBreak = muster.path.length + sea.path.length; // index in `route` where the enemy land leg begins
-  const buildingTiles = new Set();
+  // A plain array, not a Set — this object gets JSON-round-tripped through
+  // the autosave (see saveMatch), and Set doesn't survive that (JSON.stringify
+  // silently turns it into "{}", which then crashes stepAttack's .has() call
+  // the next time an in-flight attack ticks after a reload).
+  const buildingTiles = [];
   for (const [r, c] of land.path) {
     const t = grid[r][c];
     const isFlag = r === enemyCore[0] && c === enemyCore[1];
-    if (t.building && !isFlag) buildingTiles.add(`${r},${c}`);
+    if (t.building && !isFlag) buildingTiles.push(`${r},${c}`);
   }
 
   return { route, legBreak, buildingTiles };
@@ -639,13 +643,22 @@ function shouldAIAttack(army, threshold = AI_ATTACK_THRESHOLD) {
 /* just keeps marching from where it was, nothing "catches up" instantly.  */
 /* ---------------------------------------------------------------------- */
 
-// Bumped to v2 2026-09-17: wall/anti-siege buildings and the siege unit were
-// removed. A v1 save could still reference those defIds (a wall tile, an
-// antiSiege count, a nonzero armies.*.siege) — those defs no longer exist in
+// v2, 2026-09-17: wall/anti-siege buildings and the siege unit were removed.
+// A v1 save could still reference those defIds (a wall tile, an antiSiege
+// count, a nonzero armies.*.siege) — those defs no longer exist in
 // BUILDING_DEFS/UNIT_DEFS, so reading an old save back in would crash rather
-// than just render wrong. Bumping the key makes loadSavedMatch() simply miss
-// and fall back to a fresh match instead, per the persistence convention.
-const SAVE_KEY = "territory-game-save-v2";
+// than just render wrong.
+// v3, same day: found a real, separate bug the v2 bump didn't cover —
+// computeAttackRoute's `buildingTiles` was a Set, and Set doesn't survive
+// the JSON round-trip through localStorage (JSON.stringify silently turns
+// it into "{}"), so any save written *while an attack was in flight*
+// crashed on the very next load the moment stepAttack tried to call
+// .has() on it (the reported bug: "screen turns white every time I try to
+// resume"). Fixed by switching buildingTiles to a plain array (see
+// computeAttackRoute/stepAttack), but any save already written with the
+// broken Set-turned-{} shape needed discarding too, not just future ones —
+// hence the second bump right behind the first.
+const SAVE_KEY = "territory-game-save-v3";
 let cachedSave; // memoized so mount-time lazy initializers don't each re-parse it
 
 function loadSavedMatch() {
@@ -1495,7 +1508,7 @@ function Match({ level, onExit }) {
     const [r, c] = attack.route[nextIndex];
     const posKey = `${r},${c}`;
     const onEnemyLand = nextIndex >= attack.legBreak;
-    if (onEnemyLand && attack.buildingTiles.has(posKey)) {
+    if (onEnemyLand && attack.buildingTiles.includes(posKey)) {
       setGrid((prev) => clearBuildingAt(prev, r, c));
     }
 
