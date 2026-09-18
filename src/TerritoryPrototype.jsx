@@ -142,6 +142,11 @@ const RESOURCE_META = {
 };
 
 const START_RESOURCES = { wood: 60, stone: 40, iron: 0, platinum: 0, food: 20 };
+// For "Start test match" — a big stockpile so you can build/attack right
+// away instead of waiting on the early economy grind. Given to both sides,
+// same as START_RESOURCES — the AI still plays by the same rules, no
+// special-casing (see decideAIAction/next-steps memory).
+const TEST_RESOURCES = { wood: 2000, stone: 2000, iron: 2000, platinum: 0, food: 2000 };
 
 /* ---------------------------------------------------------------------- */
 /* Map generation                                                         */
@@ -1043,10 +1048,10 @@ function ToolbarButton({ icon: Icon, label, cost, active, affordable, onClick, t
 /* Main component                                                         */
 /* ---------------------------------------------------------------------- */
 
-function Match({ level, onExit }) {
+function Match({ level, isTest, onExit }) {
   const [grid, setGrid] = useState(() => loadSavedMatch()?.grid ?? buildInitialGrid());
-  const [resources, setResources] = useState(() => loadSavedMatch()?.resources ?? START_RESOURCES);
-  const [aiResources, setAiResources] = useState(() => loadSavedMatch()?.aiResources ?? START_RESOURCES); // AI gets no special exceptions
+  const [resources, setResources] = useState(() => loadSavedMatch()?.resources ?? (isTest ? TEST_RESOURCES : START_RESOURCES));
+  const [aiResources, setAiResources] = useState(() => loadSavedMatch()?.aiResources ?? (isTest ? TEST_RESOURCES : START_RESOURCES)); // AI gets no special exceptions
   const [selectedTool, setSelectedTool] = useState(null); // building id | "claim" | null
   const [message, setMessage] = useState(null);
   const msgTimer = useRef(null);
@@ -1143,7 +1148,7 @@ function Match({ level, onExit }) {
     saveSnapshotRef.current = {
       grid, resources, aiResources, phase, matchStart, coreHp, endedAt,
       armies, playerAttack, enemyAttack, firstBarracksMs, firstAttackMs, firstAttackPower,
-      buildLog: buildLogRef.current, level,
+      buildLog: buildLogRef.current, level, isTest,
     };
   });
 
@@ -1178,11 +1183,16 @@ function Match({ level, onExit }) {
       t.owner === "player" && t.building?.defId === "barracks" && t.building.status === "active"));
     if (!hasBarracks) return;
     const elapsed = Date.now() - matchStart;
-    const profile = loadPlayerProfile();
-    profile.firstBarracksMs = recordProfileStat(profile.firstBarracksMs, elapsed, Math.min);
-    savePlayerProfile(profile);
+    // Test matches still track this locally (for the in-match HUD/AI-target
+    // calibration this session), just never write it into the player's real
+    // profile — a burst of test runs shouldn't skew "your fastest ever".
+    if (!isTest) {
+      const profile = loadPlayerProfile();
+      profile.firstBarracksMs = recordProfileStat(profile.firstBarracksMs, elapsed, Math.min);
+      savePlayerProfile(profile);
+    }
     setFirstBarracksMs(elapsed);
-  }, [grid, matchStart, firstBarracksMs]);
+  }, [grid, matchStart, firstBarracksMs, isTest]);
 
   /* ---- keep the map sized to the window ---- */
   useEffect(() => {
@@ -1224,21 +1234,25 @@ function Match({ level, onExit }) {
       const endedAt = Date.now();
       setPhase(outcome);
       setEndedAt(endedAt);
-      if (outcome === "won") recordLevelWon(level);
-      // anonymous, best-effort — see supabaseClient.js. Fires exactly once
-      // per match, right here, since this whole branch only runs the one
-      // tick `over` actually flips (the guard above skips every run after).
-      submitMatchTelemetry({
-        outcome,
-        match_length_ms: endedAt - matchStart,
-        first_barracks_ms: firstBarracksMs,
-        first_attack_ms: firstAttackMs,
-        first_attack_power: firstAttackPower,
-        build_log: buildLogRef.current,
-        app_version: APP_VERSION,
-      });
+      // Test matches don't unlock real campaign progress or send telemetry —
+      // "doesn't count" should mean nothing about it persists as real data.
+      if (!isTest) {
+        if (outcome === "won") recordLevelWon(level);
+        // anonymous, best-effort — see supabaseClient.js. Fires exactly once
+        // per match, right here, since this whole branch only runs the one
+        // tick `over` actually flips (the guard above skips every run after).
+        submitMatchTelemetry({
+          outcome,
+          match_length_ms: endedAt - matchStart,
+          first_barracks_ms: firstBarracksMs,
+          first_attack_ms: firstAttackMs,
+          first_attack_power: firstAttackPower,
+          build_log: buildLogRef.current,
+          app_version: APP_VERSION,
+        });
+      }
     }
-  }, [coreHp, over, matchStart, firstBarracksMs, firstAttackMs, firstAttackPower, level]);
+  }, [coreHp, over, matchStart, firstBarracksMs, firstAttackMs, firstAttackPower, level, isTest]);
 
   const damageCore = useCallback((side, amount) => {
     setCoreHp((p) => ({ ...p, [side]: Math.max(0, p[side] - amount) }));
@@ -1455,10 +1469,12 @@ function Match({ level, onExit }) {
     if (firstAttackMs === null) {
       const elapsed = Date.now() - matchStart;
       const power = armyPower(armies.player);
-      const profile = loadPlayerProfile();
-      profile.firstAttackMs = recordProfileStat(profile.firstAttackMs, elapsed, Math.min);
-      profile.firstAttackPower = recordProfileStat(profile.firstAttackPower, power, Math.max);
-      savePlayerProfile(profile);
+      if (!isTest) {
+        const profile = loadPlayerProfile();
+        profile.firstAttackMs = recordProfileStat(profile.firstAttackMs, elapsed, Math.min);
+        profile.firstAttackPower = recordProfileStat(profile.firstAttackPower, power, Math.max);
+        savePlayerProfile(profile);
+      }
       setFirstAttackMs(elapsed);
       setFirstAttackPower(power);
     }
@@ -1542,8 +1558,8 @@ function Match({ level, onExit }) {
   function newMatch() {
     const fresh = {
       grid: buildInitialGrid(),
-      resources: START_RESOURCES,
-      aiResources: START_RESOURCES,
+      resources: isTest ? TEST_RESOURCES : START_RESOURCES,
+      aiResources: isTest ? TEST_RESOURCES : START_RESOURCES,
       coreHp: { player: CORE_MAX_HP, enemy: CORE_MAX_HP },
       endedAt: null,
       armies: { player: zeroArmy(), enemy: zeroArmy() },
@@ -1556,6 +1572,7 @@ function Match({ level, onExit }) {
       firstAttackPower: null,
       buildLog: [],
       level,
+      isTest,
     };
     buildLogRef.current = fresh.buildLog;
     setGrid(fresh.grid);
@@ -1578,7 +1595,7 @@ function Match({ level, onExit }) {
     // updated, if the last match recorded a new milestone) profile, instead
     // of keeping whatever was calibrated when this component first mounted
     aiTargetsRef.current = null;
-    recordNewMatchStarted();
+    if (!isTest) recordNewMatchStarted();
     saveMatch(fresh); // overwrite the old save immediately, don't wait for the next autosave tick
   }
 
@@ -1788,7 +1805,9 @@ function Match({ level, onExit }) {
       <div style={{ position: "absolute", top: 10, left: 12, display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start" }}>
         <div style={{ ...CHIP, pointerEvents: "none", padding: "5px 11px", display: "flex", alignItems: "baseline", gap: 6 }}>
           <span style={{ fontFamily: SERIF, fontSize: 15, fontWeight: 600, color: INK }}>Territory &amp; Economy</span>
-          <span style={{ fontSize: 10.5, fontWeight: 600, color: INK_MUTED }}>Level {level}</span>
+          <span style={{ fontSize: 10.5, fontWeight: 600, color: isTest ? RUST : INK_MUTED }}>
+            {isTest ? "Test" : `Level ${level}`}
+          </span>
         </div>
         <CoreBar label="Your keep" hp={coreHp.player} color={CLAIM_EDGE} align="left" />
         {enemyAttack && (
@@ -1994,7 +2013,7 @@ function Match({ level, onExit }) {
                 : "Your keep has fallen."}
               <br />
               Match length {fmtClock((endedAt ?? Date.now()) - matchStart)}
-              {phase === "won" && level < LEVEL_COUNT && (
+              {phase === "won" && !isTest && level < LEVEL_COUNT && (
                 <>
                   <br />
                   <span style={{ color: FOREST, fontWeight: 600 }}>Level {level + 1} unlocked!</span>
@@ -2139,12 +2158,23 @@ function HomeScreen({ savedMatch, onStart, onContinue }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 8, width: "100%" }}>
           {isSavedLevel && (
             <button onClick={onContinue} style={homeButtonStyle(true)}>
-              Continue Level {selectedLevel}
+              {savedMatch?.isTest ? "Continue test match" : `Continue Level ${selectedLevel}`}
               {savedPhase === "won" ? " — victory!" : savedPhase === "lost" ? " — defeat" : ""}
             </button>
           )}
           <button onClick={() => onStart(selectedLevel)} style={homeButtonStyle(!isSavedLevel)}>
             {isSavedLevel ? "Restart level" : `Start Level ${selectedLevel}`}
+          </button>
+          <button
+            onClick={() => onStart(selectedLevel, true)}
+            title="Loaded with a big resource stockpile so you can build/attack right away. Doesn't count toward your stats, campaign progress, or the match dataset."
+            style={{
+              background: "transparent", border: "none", color: INK_MUTED,
+              fontSize: 10.5, fontFamily: SANS, textDecoration: "underline",
+              cursor: "pointer", padding: "2px 0",
+            }}
+          >
+            Start test match (unlimited resources, doesn't count)
           </button>
         </div>
 
@@ -2168,18 +2198,20 @@ export default function TerritoryPrototype() {
   const [screen, setScreen] = useState("home");
   const savedMatch = loadSavedMatch();
   const [level, setLevel] = useState(() => savedMatch?.level ?? loadLevelProgress().unlocked);
+  const [isTest, setIsTest] = useState(() => savedMatch?.isTest ?? false);
 
-  function handleStart(chosenLevel) {
+  function handleStart(chosenLevel, chosenIsTest = false) {
     const activeMatch = savedMatch && savedMatch.phase !== "won" && savedMatch.phase !== "lost";
     if (activeMatch && !window.confirm("Start a new match? This will erase your current one.")) return;
     clearSavedMatch();
-    recordNewMatchStarted();
+    if (!chosenIsTest) recordNewMatchStarted();
     setLevel(chosenLevel);
+    setIsTest(chosenIsTest);
     setScreen("game");
   }
 
   if (screen === "home") {
     return <HomeScreen savedMatch={savedMatch} onStart={handleStart} onContinue={() => setScreen("game")} />;
   }
-  return <Match level={level} onExit={() => setScreen("home")} />;
+  return <Match level={level} isTest={isTest} onExit={() => setScreen("home")} />;
 }
