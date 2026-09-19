@@ -475,8 +475,6 @@ function pickClaimSpot(grid, owner, claimSpots) {
 
 const AI_TICK_MS = 1600;             // how often the AI reconsiders its next move, normally
 const AI_CATCHUP_TICK_MS = 500;      // ...and how often while behind the player's own historical pace (see aiTargetsRef)
-const AI_CLAIM_GROWTH_CHANCE = 0.3;  // chance it grabs land even when it could build instead
-const AI_CLAIM_WOOD_BUFFER = CLAIM_COST * 3; // wood it likes to keep in reserve before "just growing"
 // A barracks running flat out eats ~1.9 food/sec on average across the 4
 // troop types (cost/trainMs) but one fishery only makes 0.5/sec — so several
 // fisheries per barracks are needed just to keep training at a decent clip,
@@ -488,6 +486,13 @@ const AI_FISHERY_PER_BARRACKS = 5;
 // same numbers the AI used unconditionally before this existed.
 const DEFAULT_TARGET_FIRST_BARRACKS_MS = 180000; // 3 minutes
 const DEFAULT_TARGET_ATTACK_POWER = AI_ATTACK_THRESHOLD;
+// How much army power the AI wants per barracks before it'll commit to an
+// attack, once it has more than one — without this, every attack all game
+// is sized like the very first one (Tyler: "its attacks are super weak"),
+// since aiTargetsRef's calibrated threshold is a fixed number computed once
+// at match start and never grows even as the AI's own economy does. ~8 units
+// worth (avg unit power ~6.3) per barracks before committing.
+const AI_POWER_PER_BARRACKS = 50;
 
 function countAIBuildings(grid) {
   const counts = {};
@@ -563,18 +568,8 @@ function pickAIBuilding(counts, popCap, popUsed) {
 
 // Pure decision function: given the current board + the AI's own resources,
 // returns the one action it wants to take this tick, or null (saving up / stuck).
-function decideAIAction(grid, resources, catchingUp) {
+function decideAIAction(grid, resources) {
   const claimSpots = computeValidTiles(grid, "enemy", "claim");
-
-  // Occasionally prioritize territory over building so the AI doesn't pack its
-  // starting patch solid before ever expanding — skipped while it's behind
-  // the player's own historical pace (see the AI catch-up section), since
-  // every tick should go toward the actual bottleneck then, not a detour.
-  if (!catchingUp && claimSpots.size > 0 && resources.wood >= AI_CLAIM_WOOD_BUFFER && Math.random() < AI_CLAIM_GROWTH_CHANCE) {
-    const [r, c] = keyToRC(pickClaimSpot(grid, "enemy", claimSpots));
-    return { type: "claim", r, c };
-  }
-
   const { counts, popCap, popUsed } = countAIBuildings(grid);
   const defId = pickAIBuilding(counts, popCap, popUsed);
   const def = BUILDING_DEFS[defId];
@@ -586,9 +581,15 @@ function decideAIAction(grid, resources, catchingUp) {
     return { type: "build", defId, trains, r, c };
   }
 
-  // Only claim as a fallback when it's actually out of room for the building it
-  // wants — not just because it can't afford it yet. Otherwise the AI nibbles
-  // away at the wood it's trying to save up, and never catches up.
+  // Claim only when it's actually needed: no room for the building it wants
+  // right now, not just opportunistically whenever wood happens to be
+  // sitting around. There used to be a random "claim for growth" chance here
+  // too, but Tyler flagged it as burning wood the economy needed and taking
+  // land it didn't actually need yet — land is a means to an end (room to
+  // build on), not something worth grabbing for its own sake. Also: only
+  // claim once it's actually out of room, not just unaffordable — otherwise
+  // the AI nibbles away at the wood it's trying to save up, and never
+  // catches up.
   if (spots.size === 0 && claimSpots.size > 0 && resources.wood >= CLAIM_COST) {
     const [r, c] = keyToRC(pickClaimSpot(grid, "enemy", claimSpots));
     return { type: "claim", r, c };
@@ -1359,26 +1360,39 @@ function Match({ level, isTest, onExit }) {
   useEffect(() => {
     if (over) return;
     let timeoutId;
+    // A healthy economy can produce resources faster than one decision every
+    // AI_TICK_MS can spend — without this, a well-off AI visibly sits on
+    // wood/stone it can clearly afford things with (Tyler: "its not spending
+    // all its rss when it has them"). Keep deciding within the same tick
+    // until it genuinely can't afford/fit anything else, capped so one tick
+    // can't dump an unrealistic pile of buildings down at once.
+    const MAX_ACTIONS_PER_TICK = 6;
     const tick = () => {
-      const g = gridRef.current;
-      const hasBarracks = g.some((row) => row.some((t) =>
+      const hasBarracks = gridRef.current.some((row) => row.some((t) =>
         t.owner === "enemy" && t.building?.defId === "barracks" && t.building.status === "active"));
       const behind = !hasBarracks && (Date.now() - matchStartRef.current) > aiTargetsRef.current.firstBarracksMs;
 
-      const action = decideAIAction(g, aiResRef.current, behind);
-      if (action) {
+      let grid = gridRef.current;
+      let res = aiResRef.current;
+      let acted = false;
+      for (let i = 0; i < MAX_ACTIONS_PER_TICK; i++) {
+        const action = decideAIAction(grid, res);
+        if (!action) break;
+        acted = true;
         if (action.type === "claim") {
-          setAiResources((p) => ({ ...p, wood: p.wood - CLAIM_COST }));
-          setGrid((prev) => withClaimedTile(prev, action.r, action.c, "enemy"));
+          res = { ...res, wood: res.wood - CLAIM_COST };
+          grid = withClaimedTile(grid, action.r, action.c, "enemy");
         } else {
           const def = BUILDING_DEFS[action.defId];
-          setAiResources((p) => {
-            const next = { ...p };
-            for (const [res, amt] of Object.entries(def.cost)) next[res] -= amt;
-            return next;
-          });
-          setGrid((prev) => withBuiltTile(prev, action.r, action.c, "enemy", def, action.trains));
+          const nextRes = { ...res };
+          for (const [resKey, amt] of Object.entries(def.cost)) nextRes[resKey] -= amt;
+          res = nextRes;
+          grid = withBuiltTile(grid, action.r, action.c, "enemy", def, action.trains);
         }
+      }
+      if (acted) {
+        setGrid(grid);
+        setAiResources(res);
       }
       timeoutId = setTimeout(tick, behind ? AI_CATCHUP_TICK_MS : AI_TICK_MS);
     };
@@ -1543,11 +1557,16 @@ function Match({ level, isTest, onExit }) {
 
   // The AI's own decision to attack: opportunistic, once its army is "good
   // enough" (see shouldAIAttack) — not on a timer or a wave schedule. The
-  // threshold itself comes from aiTargetsRef (the player's own historical
-  // attack strength), not a fixed guess.
+  // baseline threshold comes from aiTargetsRef (the player's own historical
+  // opening-attack strength), then scales up with the AI's own current
+  // barracks count so a mature economy commits a correspondingly bigger
+  // force instead of sending the same small opening-sized army for the rest
+  // of the match — see AI_POWER_PER_BARRACKS.
   useEffect(() => {
     if (over || phase !== "battle" || enemyAttack) return;
-    if (!shouldAIAttack(armies.enemy, aiTargetsRef.current.attackThreshold)) return;
+    const barracksCount = countAIBuildings(gridRef.current).counts.barracks ?? 0;
+    const threshold = Math.max(aiTargetsRef.current.attackThreshold, barracksCount * AI_POWER_PER_BARRACKS);
+    if (!shouldAIAttack(armies.enemy, threshold)) return;
     const route = computeAttackRoute(gridRef.current, "enemy");
     if (!route) return;
     setArmies((p) => ({ ...p, enemy: zeroArmy() }));
