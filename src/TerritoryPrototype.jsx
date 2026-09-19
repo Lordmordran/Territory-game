@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   Trees, Mountain, Pickaxe, Wheat, Gem, Users, Home, Anchor, Flag, X, RotateCcw, LandPlot,
-  Swords, Hourglass, Trophy, Skull, Ship, Tent, Lock, Check, Map,
+  Swords, Hourglass, Trophy, Skull, Ship, Tent, Lock, Check, Map as MapIcon,
 } from "lucide-react";
 import { submitMatchTelemetry } from "./supabaseClient.js";
 
@@ -1830,7 +1830,7 @@ function Match({ level, isTest, onExit }) {
               fontSize: 11.5, color: INK, padding: "6px 10px", cursor: "pointer", fontFamily: SANS,
             }}
           >
-            <Map size={12} /> Level map
+            <MapIcon size={12} /> Level map
           </button>
           <button
             onClick={newMatch}
@@ -2029,7 +2029,7 @@ function Match({ level, isTest, onExit }) {
                   cursor: "pointer", fontFamily: SANS,
                 }}
               >
-                <Map size={13} /> Level map
+                <MapIcon size={13} /> Level map
               </button>
               <button
                 onClick={newMatch}
