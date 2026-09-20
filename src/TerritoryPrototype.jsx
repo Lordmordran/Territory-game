@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   Trees, Mountain, Pickaxe, Wheat, Gem, Users, Home, Anchor, Flag, X, RotateCcw, LandPlot,
-  Swords, Hourglass, Trophy, Skull, Ship, Tent, Lock, Check, Map as MapIcon,
+  Swords, Hourglass, Trophy, Skull, Ship, Tent, Lock, Check, Map as MapIcon, Route as RouteIcon,
 } from "lucide-react";
 import { submitMatchTelemetry } from "./supabaseClient.js";
 
@@ -361,6 +361,79 @@ function computeAttackRoute(grid, attackerOwner) {
   // the next time an in-flight attack ticks after a reload).
   const buildingTiles = [];
   for (const [r, c] of land.path) {
+    const t = grid[r][c];
+    const isFlag = r === enemyCore[0] && c === enemyCore[1];
+    if (t.building && !isFlag) buildingTiles.push(`${r},${c}`);
+  }
+
+  return { route, legBreak, buildingTiles };
+}
+
+// 8-directional line between two tiles (Bresenham) — used to fill gaps in a
+// player-drawn route when a fast drag skips over tiles between two
+// consecutive pointermove samples, so the resulting route stays a genuinely
+// connected chain of adjacent tiles.
+function lineTiles(r0, c0, r1, c1) {
+  const points = [];
+  const dr = Math.abs(r1 - r0), dc = Math.abs(c1 - c0);
+  const sr = r0 < r1 ? 1 : -1, sc = c0 < c1 ? 1 : -1;
+  let err = dr - dc, r = r0, c = c0;
+  while (true) {
+    points.push([r, c]);
+    if (r === r1 && c === c1) break;
+    const e2 = 2 * err;
+    if (e2 > -dc) { err -= dc; r += sr; }
+    if (e2 < dr) { err += dr; c += sc; }
+  }
+  return points;
+}
+
+// Turns a player-drawn trail into the same { route, legBreak, buildingTiles }
+// shape computeAttackRoute produces, so it plugs into the exact same
+// stepAttack/rendering machinery — the drawn tiles ARE the route, just with
+// both ends auto-connected (home keep to wherever drawing started, and
+// wherever it ended to the enemy flag) via ordinary unconstrained
+// pathfinding, the same way the automatic route already stitches its own
+// muster/landing legs on. Terrain never blocks a route in this game (see
+// AttackMarker — boat vs. troops is just read off the current tile's
+// terrain), so "unconstrained" here isn't a special case, it's the same rule
+// as everywhere else.
+function buildRouteFromDrawing(grid, attackerOwner, drawnPoints) {
+  if (!drawnPoints || drawnPoints.length === 0) return null;
+  const homeCore = attackerOwner === "player" ? [TC_ROW, TC_COL] : [ENEMY_ROW, ENEMY_COL];
+  const enemyCore = attackerOwner === "player" ? [ENEMY_ROW, ENEMY_COL] : [TC_ROW, TC_COL];
+  const anywhere = () => true;
+
+  const first = drawnPoints[0];
+  const last = drawnPoints[drawnPoints.length - 1];
+  const isHomeCore = first[0] === homeCore[0] && first[1] === homeCore[1];
+  const isEnemyCore = last[0] === enemyCore[0] && last[1] === enemyCore[1];
+  const prefix = isHomeCore ? { path: [homeCore] } : findPath(grid, homeCore, first, anywhere);
+  if (!prefix) return null;
+  const suffix = isEnemyCore ? { path: [enemyCore] } : findPath(grid, last, enemyCore, anywhere);
+  if (!suffix) return null;
+
+  const route = [...prefix.path, ...drawnPoints.slice(1), ...suffix.path.slice(1)];
+
+  // Same idea as the automatic route's legBreak: the one moment a standing
+  // garrison gets a say is stepping onto the *enemy's* landmass. Since the
+  // two islands never touch (see generateTerrain), the first land tile
+  // reached after crossing any water is reliably the enemy's, not home
+  // soil — no need to know in advance which portion of a hand-drawn path is
+  // "the sea leg". Falls back to gating from the very first step (the safe/
+  // conservative option — never lets an attacker skip the clash) if the
+  // drawn path somehow never touches water at all.
+  let legBreak = 0;
+  let sawWater = false;
+  for (let i = 0; i < route.length; i++) {
+    const [r, c] = route[i];
+    if (grid[r][c].terrain === "water") { sawWater = true; continue; }
+    if (sawWater) { legBreak = i; break; }
+  }
+
+  const buildingTiles = [];
+  for (let i = legBreak; i < route.length; i++) {
+    const [r, c] = route[i];
     const t = grid[r][c];
     const isFlag = r === enemyCore[0] && c === enemyCore[1];
     if (t.building && !isFlag) buildingTiles.push(`${r},${c}`);
@@ -1033,6 +1106,26 @@ function GarrisonMarker({ visible, total, corePos, tileSize }) {
   );
 }
 
+// The visible trail while the player is drawing (or just finished drawing)
+// their own attack route — a simple line through each drawn tile's center,
+// same coordinate system as the other map overlays (tilePixelPos).
+function DrawnRouteTrail({ points, tileSize }) {
+  if (!points || points.length < 2) return null;
+  const pixelPoints = points.map(([r, c]) => {
+    const { left, top } = tilePixelPos(r, c, tileSize);
+    return `${left + tileSize / 2},${top + tileSize / 2}`;
+  }).join(" ");
+  return (
+    <svg style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "visible", zIndex: 4 }}>
+      <polyline
+        points={pixelPoints} fill="none" stroke={CLAIM_EDGE}
+        strokeWidth={Math.max(2, tileSize * 0.15)} strokeLinecap="round" strokeLinejoin="round"
+        opacity={0.85}
+      />
+    </svg>
+  );
+}
+
 function ToolbarButton({ icon: Icon, label, cost, active, affordable, onClick, title }) {
   return (
     <button
@@ -1076,6 +1169,17 @@ function Match({ level, isTest, onExit }) {
   const [message, setMessage] = useState(null);
   const msgTimer = useRef(null);
   const [viewport, setViewport] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
+
+  /* ---- player-drawn attack route: "Plan Route" mode lets the player drag
+     their own path instead of using the automatic shortest route (see
+     buildRouteFromDrawing). `routeDrawing` is the mode being active at all;
+     `isDraggingRouteRef` is whether the pointer is currently down within
+     that mode — a ref, not state, since it's checked/set on every
+     pointermove and doesn't itself need to trigger a render. ---- */
+  const [routeDrawing, setRouteDrawing] = useState(false);
+  const [drawnRoute, setDrawnRoute] = useState([]); // [[r,c], ...]
+  const isDraggingRouteRef = useRef(false);
+  const mapWrapperRef = useRef(null);
 
   /* ---- match state ---- */
   const [phase, setPhase] = useState(() => loadSavedMatch()?.phase ?? "build"); // build | battle | won | lost
@@ -1456,6 +1560,7 @@ function Match({ level, isTest, onExit }) {
 
   /* ---- handlers ---- */
   function handleTileClick(r, c) {
+    if (routeDrawing) return; // drawing owns clicks on the map right now
     if (!selectedTool) return;
     const key = `${r},${c}`;
     if (!validTiles?.has(key)) {
@@ -1494,11 +1599,11 @@ function Match({ level, isTest, onExit }) {
     flash(`${def.name} under construction.`, "success");
   }
 
-  function launchAttack() {
-    if (phase !== "battle" || playerAttack) return;
-    if (armyTotal(armies.player) === 0) return;
-    const route = computeAttackRoute(grid, "player");
-    if (!route) return flash("No route to the enemy keep right now.");
+  // Shared by both the automatic and player-drawn attack: records the
+  // first-attack profile milestone (once per match) and actually sends the
+  // army out. `route` is the { route, legBreak, buildingTiles } shape both
+  // computeAttackRoute and buildRouteFromDrawing produce.
+  function commitPlayerAttack(route) {
     if (firstAttackMs === null) {
       const elapsed = Date.now() - matchStart;
       const power = armyPower(armies.player);
@@ -1514,6 +1619,70 @@ function Match({ level, isTest, onExit }) {
     setArmies((p) => ({ ...p, player: zeroArmy() }));
     setPlayerAttack({ army: armies.player, ...route, stepIndex: 0, nextStepAt: clock + STEP_MS });
     flash("Your army sets out across the water...", "success");
+  }
+
+  function launchAttack() {
+    if (phase !== "battle" || playerAttack) return;
+    if (armyTotal(armies.player) === 0) return;
+    const route = computeAttackRoute(grid, "player");
+    if (!route) return flash("No route to the enemy keep right now.");
+    commitPlayerAttack(route);
+  }
+
+  /* ---- player-drawn route: click "Plan Route", then press-and-drag across
+     the map to trace a path; both ends auto-connect to the keep/flag (see
+     buildRouteFromDrawing) so you only have to draw the part you actually
+     care about, e.g. picking which shore to leave from. ---- */
+  function tileFromPointerEvent(e) {
+    if (!mapWrapperRef.current) return null;
+    const rect = mapWrapperRef.current.getBoundingClientRect();
+    const c = Math.floor((e.clientX - rect.left - GRID_BORDER) / (tileSize + GRID_GAP));
+    const r = Math.floor((e.clientY - rect.top - GRID_BORDER) / (tileSize + GRID_GAP));
+    if (r < 0 || r >= GRID_ROWS || c < 0 || c >= GRID_COLS) return null;
+    return [r, c];
+  }
+
+  function handleRoutePointerDown(e) {
+    const tile = tileFromPointerEvent(e);
+    if (!tile) return;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    isDraggingRouteRef.current = true;
+    setDrawnRoute([tile]); // pressing down again mid-mode just starts a fresh trace — doubles as "redraw"
+  }
+
+  function handleRoutePointerMove(e) {
+    if (!isDraggingRouteRef.current) return;
+    const tile = tileFromPointerEvent(e);
+    if (!tile) return;
+    setDrawnRoute((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && last[0] === tile[0] && last[1] === tile[1]) return prev;
+      // A fast drag can skip several tiles between two pointermove samples —
+      // fill the gap so the route stays a genuinely connected chain.
+      const filled = last ? lineTiles(last[0], last[1], tile[0], tile[1]).slice(1) : [tile];
+      return [...prev, ...filled];
+    });
+  }
+
+  function endRouteDrag() {
+    isDraggingRouteRef.current = false;
+  }
+
+  function cancelRouteDrawing() {
+    setRouteDrawing(false);
+    setDrawnRoute([]);
+    isDraggingRouteRef.current = false;
+  }
+
+  function launchDrawnAttack() {
+    if (phase !== "battle" || playerAttack) return;
+    if (armyTotal(armies.player) === 0) return;
+    if (drawnRoute.length < 2) return flash("Draw a longer route first.");
+    const route = buildRouteFromDrawing(grid, "player", drawnRoute);
+    if (!route) return flash("That route doesn't connect — try drawing again.");
+    commitPlayerAttack(route);
+    setRouteDrawing(false);
+    setDrawnRoute([]);
   }
 
   // Walks one attack's route forward by one step per tick: muster to the
@@ -1734,8 +1903,17 @@ function Match({ level, isTest, onExit }) {
       <div style={{ position: "absolute", inset: 0, display: "flex", overflow: "auto", overflowAnchor: "none" }}>
         {/* Plain positioning wrapper (not a grid) so the attack/garrison
             markers below can be absolutely-positioned siblings of the tile
-            grid instead of grid items inside it — see tilePixelPos. */}
-        <div style={{ position: "relative", flexShrink: 0, margin: "auto" }}>
+            grid instead of grid items inside it — see tilePixelPos. Also the
+            drag surface for "Plan Route" (see tileFromPointerEvent, which
+            measures pointer position against this exact element). */}
+        <div
+          ref={mapWrapperRef}
+          style={{ position: "relative", flexShrink: 0, margin: "auto", cursor: routeDrawing ? "crosshair" : undefined }}
+          onPointerDown={routeDrawing ? handleRoutePointerDown : undefined}
+          onPointerMove={routeDrawing ? handleRoutePointerMove : undefined}
+          onPointerUp={routeDrawing ? endRouteDrag : undefined}
+          onPointerCancel={routeDrawing ? endRouteDrag : undefined}
+        >
         <div
           style={{
             display: "grid",
@@ -1769,6 +1947,7 @@ function Match({ level, isTest, onExit }) {
                   <div
                     key={key}
                     onClick={() => {
+                      if (routeDrawing) return; // drawing owns the map while active — see the pointer handlers on the map wrapper
                       if (isOwnBarracks && !selectedTool) {
                         setBarracksMenu((m) => (m && m.r === r && m.c === c ? null : { r, c }));
                         return;
@@ -1836,6 +2015,7 @@ function Match({ level, isTest, onExit }) {
         <AttackMarker attack={enemyAttack} grid={grid} side="enemy" tileSize={tileSize} />
         <GarrisonMarker visible={!!enemyAttack} total={armyTotal(armies.player)} corePos={[TC_ROW, TC_COL]} tileSize={tileSize} />
         <GarrisonMarker visible={!!playerAttack} total={armyTotal(armies.enemy)} corePos={[ENEMY_ROW, ENEMY_COL]} tileSize={tileSize} />
+        <DrawnRouteTrail points={drawnRoute} tileSize={tileSize} />
         </div>
       </div>
 
@@ -1960,30 +2140,84 @@ function Match({ level, isTest, onExit }) {
               : playerAttack ? "Your army is already en route"
               : armyTotal(armies.player) === 0 ? "Train some troops first — build a barracks"
               : null;
+
+            if (routeDrawing) {
+              const drawBlockedReason = drawnRoute.length < 2 ? "Press and drag on the map to draw a path" : null;
+              return (
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <button
+                    onClick={cancelRouteDrawing}
+                    style={{
+                      ...CHIP, display: "flex", alignItems: "center", gap: 4,
+                      fontSize: 11.5, color: INK, padding: "6px 10px", cursor: "pointer", fontFamily: SANS,
+                    }}
+                  >
+                    <X size={12} /> Cancel
+                  </button>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                    <button
+                      onClick={launchDrawnAttack}
+                      disabled={!!drawBlockedReason}
+                      title={drawBlockedReason ?? "Send your whole army along the drawn route"}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 6,
+                        background: RUST, color: "#FBF6E8", border: "none", borderRadius: 8,
+                        padding: "6px 12px", fontFamily: SANS, fontSize: 11.5, fontWeight: 600,
+                        cursor: drawBlockedReason ? "not-allowed" : "pointer",
+                        opacity: drawBlockedReason ? 0.4 : 1,
+                      }}
+                    >
+                      <Ship size={13} strokeWidth={2.25} /> Launch route
+                    </button>
+                    {drawBlockedReason && (
+                      <span style={{ fontSize: 9, color: INK_MUTED, maxWidth: 130, textAlign: "center", lineHeight: 1.25 }}>
+                        {drawBlockedReason}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
             return (
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <button
-                  onClick={launchAttack}
+                  onClick={() => { setSelectedTool(null); setBarracksMenu(null); setDrawnRoute([]); setRouteDrawing(true); }}
                   disabled={!!attackBlockedReason}
-                  title={attackBlockedReason ?? "Send your whole army at the enemy keep"}
+                  title={attackBlockedReason ?? "Draw your own path instead of the automatic route"}
                   style={{
-                    display: "flex", alignItems: "center", gap: 6,
-                    background: RUST, color: "#FBF6E8", border: "none", borderRadius: 8,
-                    padding: "6px 12px", fontFamily: SANS, fontSize: 11.5, fontWeight: 600,
+                    ...CHIP, display: "flex", alignItems: "center", gap: 4,
+                    fontSize: 11.5, color: INK, padding: "6px 10px", fontFamily: SANS,
                     cursor: attackBlockedReason ? "not-allowed" : "pointer",
                     opacity: attackBlockedReason ? 0.4 : 1,
                   }}
                 >
-                  <Ship size={13} strokeWidth={2.25} /> Attack
+                  <RouteIcon size={12} /> Plan route
                 </button>
-                {/* Always-visible reason, not just a hover title — a title tooltip
-                    never shows on a trackpad/touch device, so a disabled button
-                    otherwise just looks broken with no explanation at all. */}
-                {attackBlockedReason && (
-                  <span style={{ fontSize: 9, color: INK_MUTED, maxWidth: 110, textAlign: "center", lineHeight: 1.25 }}>
-                    {attackBlockedReason}
-                  </span>
-                )}
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                  <button
+                    onClick={launchAttack}
+                    disabled={!!attackBlockedReason}
+                    title={attackBlockedReason ?? "Send your whole army at the enemy keep"}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 6,
+                      background: RUST, color: "#FBF6E8", border: "none", borderRadius: 8,
+                      padding: "6px 12px", fontFamily: SANS, fontSize: 11.5, fontWeight: 600,
+                      cursor: attackBlockedReason ? "not-allowed" : "pointer",
+                      opacity: attackBlockedReason ? 0.4 : 1,
+                    }}
+                  >
+                    <Ship size={13} strokeWidth={2.25} /> Attack
+                  </button>
+                  {/* Always-visible reason, not just a hover title — a title tooltip
+                      never shows on a trackpad/touch device, so a disabled button
+                      otherwise just looks broken with no explanation at all. */}
+                  {attackBlockedReason && (
+                    <span style={{ fontSize: 9, color: INK_MUTED, maxWidth: 110, textAlign: "center", lineHeight: 1.25 }}>
+                      {attackBlockedReason}
+                    </span>
+                  )}
+                </div>
               </div>
             );
           })()}
