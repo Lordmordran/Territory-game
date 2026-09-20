@@ -990,10 +990,18 @@ function AttackMarker({ attack, grid, side, tileSize }) {
   const accent = side === "player" ? CLAIM_EDGE : RUST;
   return (
     <div style={{
-      position: "absolute", left, top, width: tileSize, height: tileSize,
+      position: "absolute", left: 0, top: 0, width: tileSize, height: tileSize,
       display: "flex", alignItems: "center", justifyContent: "center",
       pointerEvents: "none", zIndex: 5,
-      transition: "left 0.4s ease, top 0.4s ease",
+      transform: `translate(${left}px, ${top}px)`,
+      // Linear, and matched exactly to STEP_MS (see stepAttack) instead of a
+      // shorter "ease" transition — the old version left a ~50ms pause at
+      // every tile with a decelerate-then-reaccelerate curve on each hop,
+      // which reads as distinct hops rather than one continuous glide.
+      // `transform` instead of animating `left`/`top` directly is also
+      // compositor-only (GPU), not a layout property, which matters on the
+      // Chromebook perf budget this app is built around.
+      transition: `transform ${STEP_MS}ms linear`,
     }}>
       {onFoot
         ? <SquadSquares total={armyTotal(attack.army)} tileSize={tileSize} />
