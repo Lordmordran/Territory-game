@@ -312,8 +312,19 @@ function computeAttackRoute(grid, attackerOwner) {
   const isWater = (t) => t.terrain === "water";
   const isLand = (t) => t.terrain === "land";
 
-  const dockCandidates = findCandidateTiles(grid, homeCore, isShore, 4);
-  const landingWaterCandidates = findCandidateTiles(grid, enemyCore, isShore, 6);
+  // Grab a wide pool of nearby shore tiles on each side, then sort each pool
+  // by distance to the *opposite* core — not just proximity to the core it
+  // was searched from. Without this, "nearest shore to my own keep" has no
+  // reason to prefer the side actually facing the enemy, so the dock (and
+  // the landing spot) could easily end up on the back/far side of the
+  // island purely from BFS tie-breaking (Tyler: "the boat always goes/comes
+  // from the back"). Whichever candidate ends up first in each sorted list
+  // is the one the loop below tries first.
+  const sqDist = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
+  const dockCandidates = findCandidateTiles(grid, homeCore, isShore, 12)
+    .sort((a, b) => sqDist(a, enemyCore) - sqDist(b, enemyCore));
+  const landingWaterCandidates = findCandidateTiles(grid, enemyCore, isShore, 16)
+    .sort((a, b) => sqDist(a, homeCore) - sqDist(b, homeCore));
   if (dockCandidates.length === 0 || landingWaterCandidates.length === 0) return null;
 
   // A dock is a water tile — need the land tile right next to it (on home
