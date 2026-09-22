@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Battle Log — Territory &amp; Economy</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600&family=Inter:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #EFE6D0;
+    --panel: #F7F1E1;
+    --border: #C9B98E;
+    --ink: #2E2A1F;
+    --ink-muted: #6B6250;
+    --accent: #C17817;
+    --accent-tint: rgba(193, 120, 23, 0.14);
+    --rust: #8B3A2F;
+    --rust-tint: rgba(139, 58, 47, 0.12);
+    --forest: #4C6B3E;
+    --forest-tint: rgba(76, 107, 62, 0.12);
+    --track: rgba(46, 42, 31, 0.1);
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1C1811; --panel: #262019; --border: #4A4130;
+      --ink: #EFE6D0; --ink-muted: #A99C82;
+      --accent: #D99B4E; --accent-tint: rgba(217, 155, 78, 0.16);
+      --rust: #D08571; --rust-tint: rgba(208, 133, 113, 0.14);
+      --forest: #86AC77; --forest-tint: rgba(134, 172, 119, 0.14);
+      --track: rgba(239, 230, 208, 0.12);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+    padding: 32px 16px 48px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+  h1, h2 { font-family: 'Spectral', Georgia, serif; margin: 0; }
+  header { display: flex; flex-direction: column; gap: 6px; }
+  .head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-size: 30px; font-weight: 600; }
+  .tagline { font-size: 13.5px; color: var(--ink-muted); line-height: 1.5; }
+  #refresh-btn {
+    background: var(--panel); color: var(--ink); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 12px; font-size: 12px; font-family: inherit;
+    cursor: pointer; white-space: nowrap;
+  }
+  #refresh-btn:hover { background: var(--accent-tint); }
+  #refresh-btn:disabled { opacity: 0.5; cursor: default; }
+  #status-line { font-size: 10.5px; color: var(--ink-muted); }
+  .caveat {
+    background: var(--accent-tint); border: 1px solid var(--accent); border-radius: 8px;
+    padding: 12px 14px; font-size: 12.5px; line-height: 1.55;
+  }
+  .caveat strong { color: var(--accent); }
+  .error-box {
+    background: var(--rust-tint); border: 1px solid var(--rust); border-radius: 8px;
+    padding: 12px 14px; font-size: 12.5px; line-height: 1.55; color: var(--rust);
+  }
+  .stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .stat-tile {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; display: flex; flex-direction: column; gap: 4px;
+  }
+  .stat-tile .value { font-family: 'Spectral', Georgia, serif; font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat-tile .label { font-size: 11px; color: var(--ink-muted); }
+  section { display: flex; flex-direction: column; gap: 10px; }
+  .section-title { font-size: 13px; font-weight: 600; letter-spacing: 0.02em; color: var(--ink-muted); text-transform: uppercase; }
+  .match-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .match-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.03em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px;
+  }
+  .badge.won { background: var(--forest-tint); color: var(--forest); }
+  .badge.lost { background: var(--rust-tint); color: var(--rust); }
+  .match-date { font-size: 11.5px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+  .match-stats { display: flex; gap: 18px; flex-wrap: wrap; }
+  .mini-stat { display: flex; flex-direction: column; gap: 2px; }
+  .mini-stat .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .mini-stat .k { font-size: 10.5px; color: var(--ink-muted); }
+  .timeline { position: relative; height: 22px; margin-top: 2px; }
+  .timeline .track { position: absolute; top: 9px; left: 0; right: 0; height: 4px; border-radius: 2px; background: var(--track); }
+  .timeline .fill { position: absolute; top: 9px; left: 0; height: 4px; border-radius: 2px; background: var(--border); }
+  .timeline .mark {
+    position: absolute; top: 4px; width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid var(--panel); transform: translateX(-50%);
+  }
+  .timeline .mark.barracks { background: var(--accent); }
+  .timeline .mark.attack { background: var(--rust); }
+  .timeline-legend { display: flex; gap: 14px; font-size: 10.5px; color: var(--ink-muted); }
+  .timeline-legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot.barracks { background: var(--accent); }
+  .dot.attack { background: var(--rust); }
+  .note { font-size: 11.5px; color: var(--ink-muted); font-style: italic; }
+  .rank-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .rank-row {
+    display: flex; align-items: center; gap: 10px; padding: 9px 14px; font-size: 12.5px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  .rank-row:last-child { border-bottom: none; }
+  .rank-row .bar { height: 6px; border-radius: 3px; background: var(--accent); }
+  .rank-row .name { width: 110px; flex-shrink: 0; }
+  .rank-row .count { width: 30px; text-align: right; flex-shrink: 0; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+  .rank-row .bar-track { flex: 1; background: var(--track); border-radius: 3px; height: 6px; }
+  .empty-state { font-size: 13px; color: var(--ink-muted); padding: 20px; text-align: center; }
+  footer { font-size: 11px; color: var(--ink-muted); line-height: 1.6; padding-top: 8px; border-top: 1px solid var(--border); }
+  @media (max-width: 480px) {
+    .stat-tile { padding: 10px; }
+    .stat-tile .value { font-size: 20px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="head-row">
+      <div>
+        <div class="eyebrow">Territory &amp; Economy</div>
+        <h1>Battle Log</h1>
+      </div>
+      <button id="refresh-btn">Refresh</button>
+    </div>
+    <div class="tagline">Live match data pulled straight from Supabase — refreshes automatically, or hit Refresh anytime.</div>
+    <div id="status-line"></div>
+  </header>
+
+  <div id="content">
+    <div class="empty-state">Loading…</div>
+  </div>
+
+  <footer>
+    Reads directly from the <code>matches</code> table via the same public/anon key the game itself uses to submit
+    match results — that key is insert + read only, it can never edit or delete anything. Auto-refreshes every 60s
+    while this page is open.
+  </footer>
+</div>
+
+<script>
+(function () {
+  var SUPABASE_URL = "https://fstpcnscwjlbqdtuwztq.supabase.co";
+  var SUPABASE_ANON_KEY = "sb_publishable_PCDYysMbNJNr1d0T1v59Lw_XDZwJvSu";
+  var OUTLIER_MS = 20 * 60 * 1000; // matches longer than this are flagged as probably-idle, not real play
+  var AUTO_REFRESH_MS = 60000;
+
+  var DEF_NAMES = {
+    lumberCamp: "Lumber Camp", quarry: "Quarry", ironMine: "Iron Mine",
+    fishery: "Fishery", house: "House", barracks: "Barracks"
+  };
+
+  var contentEl = document.getElementById("content");
+  var statusEl = document.getElementById("status-line");
+  var refreshBtn = document.getElementById("refresh-btn");
+
+  function fmtClock(ms) {
+    if (ms == null) return "—";
+    var s = Math.round(ms / 1000);
+    var h = Math.floor(s / 3600);
+    var m = Math.floor((s % 3600) / 60);
+    var sec = s % 60;
+    if (h > 0) return h + "h " + m + "m";
+    return m + ":" + String(sec).padStart(2, "0");
+  }
+
+  function fmtDate(iso) {
+    var d = new Date(iso);
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
+      d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  }
+
+  function el(tag, cls, html) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (html != null) e.innerHTML = html;
+    return e;
+  }
+
+  function firstBuildDefId(buildLog) {
+    if (!Array.isArray(buildLog)) return null;
+    var first = buildLog.find(function (a) { return a.kind === "build"; });
+    return first ? first.defId : null;
+  }
+
+  function render(matches) {
+    contentEl.innerHTML = "";
+
+    if (matches.length === 0) {
+      contentEl.appendChild(el("div", "empty-state", "No matches recorded yet — play one to see it show up here."));
+      return;
+    }
+
+    var caveat = el("div", "caveat");
+    if (matches.length < 15) {
+      caveat.innerHTML = "<strong>Early data — read it as anecdotes, not trends.</strong> Only " + matches.length +
+        " match" + (matches.length === 1 ? "" : "es") + " recorded so far. Averages here can swing a lot with " +
+        "just one more match until there's real volume.";
+      contentEl.appendChild(caveat);
+    }
+
+    var wins = matches.filter(function (m) { return m.outcome === "won"; }).length;
+    var winRate = Math.round((wins / matches.length) * 100);
+    var statRow = el("div", "stat-row");
+    [
+      { value: matches.length, label: "Matches recorded" },
+      { value: winRate + "%", label: "Win rate" },
+      { value: wins + " – " + (matches.length - wins), label: "Won – Lost" }
+    ].forEach(function (s) {
+      var tile = el("div", "stat-tile");
+      tile.appendChild(el("div", "value", String(s.value)));
+      tile.appendChild(el("div", "label", s.label));
+      statRow.appendChild(tile);
+    });
+    contentEl.appendChild(statRow);
+
+    // Most common opening building, across every match that logged a build order.
+    var openingCounts = {};
+    matches.forEach(function (m) {
+      var defId = firstBuildDefId(m.build_log);
+      if (defId) openingCounts[defId] = (openingCounts[defId] || 0) + 1;
+    });
+    var openingRanked = Object.entries(openingCounts).sort(function (a, b) { return b[1] - a[1]; });
+    if (openingRanked.length > 0) {
+      var openSection = el("section");
+      openSection.appendChild(el("div", "section-title", "Most common opening building"));
+      var maxCount = openingRanked[0][1];
+      var rankList = el("div", "rank-list");
+      openingRanked.forEach(function (pair) {
+        var row = el("div", "rank-row");
+        row.appendChild(el("div", "name", DEF_NAMES[pair[0]] || pair[0]));
+        var trackWrap = el("div", "bar-track");
+        var bar = el("div", "bar");
+        bar.style.width = Math.max(6, (pair[1] / maxCount) * 100) + "%";
+        trackWrap.appendChild(bar);
+        row.appendChild(trackWrap);
+        row.appendChild(el("div", "count", String(pair[1])));
+        rankList.appendChild(row);
+      });
+      openSection.appendChild(rankList);
+      contentEl.appendChild(openSection);
+    }
+
+    // Per-match cards, newest first.
+    var matchSection = el("section");
+    matchSection.appendChild(el("div", "section-title", "Every recorded match"));
+    var cardsWrap = el("div");
+    cardsWrap.style.display = "flex";
+    cardsWrap.style.flexDirection = "column";
+    cardsWrap.style.gap = "10px";
+    matches.slice().reverse().forEach(function (m) {
+      var card = el("div", "match-card");
+
+      var head = el("div", "match-head");
+      head.appendChild(el("span", "badge " + m.outcome, m.outcome === "won" ? "Victory" : "Defeat"));
+      head.appendChild(el("span", "match-date", fmtDate(m.created_at)));
+      card.appendChild(head);
+
+      var stats = el("div", "match-stats");
+      [
+        { v: fmtClock(m.match_length_ms), k: "Match length" },
+        { v: fmtClock(m.first_barracks_ms), k: "First barracks" },
+        { v: fmtClock(m.first_attack_ms), k: "First attack" },
+        { v: m.first_attack_power != null ? Math.round(m.first_attack_power) : "—", k: "Attack power" }
+      ].forEach(function (s) {
+        var ms = el("div", "mini-stat");
+        ms.appendChild(el("div", "v", String(s.v)));
+        ms.appendChild(el("div", "k", s.k));
+        stats.appendChild(ms);
+      });
+      card.appendChild(stats);
+
+      if (m.first_barracks_ms != null && m.first_attack_ms != null && m.match_length_ms) {
+        var tl = el("div", "timeline");
+        tl.appendChild(el("div", "track"));
+        var fill = el("div", "fill");
+        fill.style.width = Math.min(100, (m.first_attack_ms / m.match_length_ms) * 100) + "%";
+        tl.appendChild(fill);
+        var bMark = el("div", "mark barracks");
+        bMark.style.left = Math.min(100, (m.first_barracks_ms / m.match_length_ms) * 100) + "%";
+        bMark.title = "First barracks — " + fmtClock(m.first_barracks_ms);
+        tl.appendChild(bMark);
+        var aMark = el("div", "mark attack");
+        aMark.style.left = Math.min(100, (m.first_attack_ms / m.match_length_ms) * 100) + "%";
+        aMark.title = "First attack — " + fmtClock(m.first_attack_ms) + " (" + Math.round(m.first_attack_power) + " power)";
+        tl.appendChild(aMark);
+        card.appendChild(tl);
+
+        var legend = el("div", "timeline-legend");
+        legend.appendChild(el("span", null, '<span class="dot barracks"></span> First barracks'));
+        legend.appendChild(el("span", null, '<span class="dot attack"></span> First attack'));
+        card.appendChild(legend);
+      }
+
+      if (m.match_length_ms > OUTLIER_MS) {
+        card.appendChild(el("div", "note", "Length is unusually long (" + fmtClock(m.match_length_ms) + ") — likely a tab left open, not active play."));
+      }
+
+      cardsWrap.appendChild(card);
+    });
+    matchSection.appendChild(cardsWrap);
+    contentEl.appendChild(matchSection);
+  }
+
+  function setStatus(text) {
+    statusEl.textContent = text;
+  }
+
+  function showError(message) {
+    contentEl.innerHTML = "";
+    var box = el("div", "error-box");
+    box.textContent = message;
+    contentEl.appendChild(box);
+  }
+
+  async function load() {
+    refreshBtn.disabled = true;
+    setStatus("Loading…");
+    try {
+      var res = await fetch(
+        SUPABASE_URL + "/rest/v1/matches?select=*&order=created_at.asc",
+        { headers: { apikey: SUPABASE_ANON_KEY, Authorization: "Bearer " + SUPABASE_ANON_KEY } }
+      );
+      if (!res.ok) throw new Error("Request failed (" + res.status + ")");
+      var rows = await res.json();
+      // Exclude the one manual RLS-verification row from an earlier debugging
+      // session — not a real match, tagged with this app_version on purpose
+      // so it's easy to filter out here.
+      var real = rows.filter(function (r) { return r.app_version !== "test-verify-only"; });
+      render(real);
+      setStatus("Updated " + new Date().toLocaleTimeString());
+    } catch (err) {
+      showError("Couldn't load match data: " + err.message + ". Check your connection and hit Refresh.");
+      setStatus("Load failed");
+    } finally {
+      refreshBtn.disabled = false;
+    }
+  }
+
+  refreshBtn.addEventListener("click", load);
+  load();
+  setInterval(load, AUTO_REFRESH_MS);
+})();
+</script>
+</body>
+</html>

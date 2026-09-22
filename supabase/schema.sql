@@ -25,20 +25,32 @@ alter table public.matches add column if not exists build_log jsonb;
 alter table public.matches enable row level security;
 
 -- The client only ever needs to INSERT a row when a match ends. It should
--- never be able to read, edit, or delete anyone's rows (including its own) —
--- that keeps the public key safe to ship in client code: even if someone
--- inspects it, all it lets them do is add more rows, never read or tamper
--- with existing ones. Reading the data for the aggregation job happens from
--- the Supabase dashboard or a server-side job, not the client.
+-- never be able to edit or delete anyone's rows (including its own) — that
+-- keeps the public key safe to ship in client code: even if someone
+-- inspects it, all it lets them do is add rows or read the (anonymous, no
+-- names/accounts/IPs) match dataset, never tamper with existing rows.
 --
 -- `to public` (not `to anon`) on purpose: Supabase's newer publishable/secret
 -- API keys don't resolve to the classic `anon` Postgres role the old JWT-
 -- based anon key did, so a policy scoped to `anon` silently never matched
 -- and every insert was rejected. `public` means "any role at all" and sidesteps
--- that entirely — the table still only allows inserts, from anyone, nothing else.
+-- that entirely — the table still only allows insert/select, from anyone,
+-- nothing else (no update, no delete).
 drop policy if exists "Anyone can submit a match result" on public.matches;
 create policy "Anyone can submit a match result"
   on public.matches
   for insert
   to public
   with check (true);
+
+-- Added later: read access for the stats dashboard (2026-09-21). Same
+-- tradeoff as the insert policy above — this key already ships publicly in
+-- the deployed game's JS bundle, so "readable by anyone with the key" isn't
+-- a new exposure, just a new capability on data that was already effectively
+-- public. Still never allows update/delete.
+drop policy if exists "Anyone can read match results" on public.matches;
+create policy "Anyone can read match results"
+  on public.matches
+  for select
+  to public
+  using (true);
