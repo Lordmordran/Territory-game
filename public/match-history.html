@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Battle Log — Territory &amp; Economy</title>
+<title>Match History — Territory &amp; Economy</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600&family=Inter:wght@400;500;600&display=swap">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
@@ -48,7 +48,7 @@
   #refresh-btn, .btn {
     background: var(--panel); color: var(--ink); border: 1px solid var(--border);
     border-radius: 8px; padding: 7px 12px; font-size: 12px; font-family: inherit;
-    cursor: pointer; white-space: nowrap;
+    cursor: pointer; white-space: nowrap; text-decoration: none; display: inline-block;
   }
   #refresh-btn:hover, .btn:hover { background: var(--accent-tint); }
   #refresh-btn:disabled, .btn:disabled { opacity: 0.5; cursor: default; }
@@ -63,28 +63,14 @@
     background: var(--rust-tint); border: 1px solid var(--rust); border-radius: 8px;
     padding: 12px 14px; font-size: 12.5px; line-height: 1.55; color: var(--rust);
   }
-  .info-box {
-    background: var(--forest-tint); border: 1px solid var(--forest); border-radius: 8px;
-    padding: 10px 14px; font-size: 12px; line-height: 1.5; color: var(--forest);
-  }
   .account-row {
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
     font-size: 11.5px; color: var(--ink-muted); flex-wrap: wrap;
   }
   .admin-tag { color: var(--accent); font-weight: 700; margin-left: 6px; }
-  .auth-card {
+  .signed-out-card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
     padding: 20px; display: flex; flex-direction: column; gap: 10px; max-width: 340px;
-  }
-  .auth-tabs { display: flex; gap: 14px; }
-  .auth-tabs button {
-    background: none; border: none; font-family: inherit; font-size: 12.5px; cursor: pointer;
-    color: var(--ink-muted); padding: 2px 0;
-  }
-  .auth-tabs button.active { color: var(--ink); font-weight: 700; }
-  .auth-card input {
-    width: 100%; padding: 8px 10px; font-size: 12.5px; font-family: inherit;
-    border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--ink);
   }
   .stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
   .stat-tile {
@@ -150,7 +136,7 @@
     <div class="head-row">
       <div>
         <div class="eyebrow">Territory &amp; Economy</div>
-        <h1 id="page-title">Battle Log</h1>
+        <h1 id="page-title">Match History</h1>
       </div>
       <button id="refresh-btn" class="btn" hidden>Refresh</button>
     </div>
@@ -234,74 +220,28 @@
     contentEl.appendChild(box);
   }
 
-  /* ---- logged-out state: a compact sign-in/sign-up form, same idea as the
-     one on the game's home screen (they share the same Supabase Auth
-     session via localStorage, so logging in on either page logs you in on
-     both). ---- */
-  function renderAuthForm() {
+  /* ---- signed-out state: this page never handles login itself anymore —
+     that's public/login.html's job (Tyler: "remove the login ability from
+     the match history thing"). Just a message + a link over there, which
+     logs you in here too once you're done (same Supabase Auth session,
+     shared via localStorage across pages on this domain). ---- */
+  function renderSignedOutState() {
     refreshBtn.hidden = true;
     accountRowEl.hidden = true;
     taglineEl.textContent = "Sign in to see your permanent match history.";
-    titleEl.textContent = "Battle Log";
+    titleEl.textContent = "Match History";
     contentEl.innerHTML = "";
 
-    var mode = "signin";
-    var card = el("div", "auth-card");
-    var tabs = el("div", "auth-tabs");
-    var signinTab = el("button", "active", "Log in");
-    var signupTab = el("button", null, "Sign up");
-    tabs.appendChild(signinTab);
-    tabs.appendChild(signupTab);
-    card.appendChild(tabs);
-
-    var emailInput = document.createElement("input");
-    emailInput.type = "email"; emailInput.required = true; emailInput.placeholder = "Email";
-    var passInput = document.createElement("input");
-    passInput.type = "password"; passInput.required = true; passInput.placeholder = "Password";
-    card.appendChild(emailInput);
-    card.appendChild(passInput);
-
-    var msgEl = el("div", "note");
-    card.appendChild(msgEl);
-
-    var submitBtn = el("button", "btn primary", "Log in");
-    submitBtn.style.alignSelf = "flex-start";
-    card.appendChild(submitBtn);
-
+    var card = el("div", "signed-out-card");
+    card.appendChild(el("div", "note", "You need to be signed in to see any match history — it's private to your account."));
+    var loginLink = el("a", "btn primary", "Log in");
+    loginLink.href = "/login.html";
+    loginLink.style.alignSelf = "flex-start";
+    card.appendChild(loginLink);
     var backLink = el("a", null, "Back to the game");
     backLink.href = "/";
     backLink.style.fontSize = "11px";
     card.appendChild(backLink);
-
-    function setMode(m) {
-      mode = m;
-      signinTab.className = mode === "signin" ? "active" : "";
-      signupTab.className = mode === "signup" ? "active" : "";
-      submitBtn.textContent = mode === "signin" ? "Log in" : "Create account";
-      msgEl.textContent = "";
-    }
-    signinTab.addEventListener("click", function () { setMode("signin"); });
-    signupTab.addEventListener("click", function () { setMode("signup"); });
-
-    submitBtn.addEventListener("click", async function () {
-      var email = emailInput.value.trim();
-      var password = passInput.value;
-      if (!email || !password) { msgEl.textContent = "Enter an email and password."; return; }
-      submitBtn.disabled = true;
-      msgEl.textContent = "";
-      var result = mode === "signin"
-        ? await sb.auth.signInWithPassword({ email: email, password: password })
-        : await sb.auth.signUp({ email: email, password: password });
-      submitBtn.disabled = false;
-      if (result.error) {
-        msgEl.textContent = result.error.message;
-      } else if (mode === "signup") {
-        msgEl.textContent = "Check your email to confirm your account, then log in.";
-      }
-      // A successful sign-in fires onAuthStateChange below, which re-renders
-      // into the signed-in view automatically.
-    });
-
     contentEl.appendChild(card);
   }
 
@@ -320,7 +260,7 @@
   }
 
   function render(matches) {
-    titleEl.textContent = currentIsAdmin ? "Battle Log — Admin" : "Battle Log";
+    titleEl.textContent = currentIsAdmin ? "Match History — Admin" : "Match History";
     taglineEl.textContent = currentIsAdmin
       ? "Every real match recorded, across every player."
       : "Your own match history — live, and permanent as long as you're signed in.";
@@ -484,7 +424,7 @@
     currentIsAdmin = false;
     if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
     setStatus("");
-    renderAuthForm();
+    renderSignedOutState();
   }
 
   refreshBtn.addEventListener("click", loadMatches);

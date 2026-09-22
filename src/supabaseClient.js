@@ -4,8 +4,11 @@ import { createClient } from "@supabase/supabase-js";
 // (aggregated across players, updated periodically — not live/real-time).
 // This key is the public "publishable"/anon one: safe to ship in client code.
 // Playing (and submitting telemetry) never requires an account — login is
-// optional and only adds permanent, account-linked match history (see
-// signUpWithEmail/signInWithEmail below and the `matches.user_id` column).
+// optional and only adds permanent, account-linked match history (see the
+// `matches.user_id` column). Actually signing in/up happens on public/
+// login.html, a standalone page with its own CDN-loaded Supabase client —
+// not through this module, which the bundled React app is the only user
+// of. This file only needs to read auth *state* (session, admin flag).
 const url = import.meta.env.VITE_SUPABASE_URL;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -29,34 +32,17 @@ export async function submitMatchTelemetry(row) {
 }
 
 /* ---------------------------------------------------------------------- */
-/* Auth — optional login, email + password. Never blocks gameplay: every   */
-/* function here degrades to a clear error/null rather than throwing when  */
-/* Supabase isn't configured, same defensive posture as telemetry above.   */
+/* Auth state — reading only. Actually signing in/up/resetting a password  */
+/* happens on public/login.html; this module only needs to know *whether*  */
+/* someone's signed in and let them sign out from within the game itself.  */
+/* Never blocks gameplay: every function here degrades to a clear default  */
+/* rather than throwing when Supabase isn't configured, same defensive     */
+/* posture as telemetry above.                                             */
 /* ---------------------------------------------------------------------- */
-
-export async function signUpWithEmail(email, password) {
-  if (!supabase) return { error: "Not configured" };
-  const { error } = await supabase.auth.signUp({ email, password });
-  return { error: error?.message ?? null };
-}
-
-export async function signInWithEmail(email, password) {
-  if (!supabase) return { error: "Not configured" };
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
-  return { error: error?.message ?? null };
-}
 
 export async function signOut() {
   if (!supabase) return;
   await supabase.auth.signOut();
-}
-
-export async function resetPassword(email) {
-  if (!supabase) return { error: "Not configured" };
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: window.location.origin,
-  });
-  return { error: error?.message ?? null };
 }
 
 // Resolves once with whatever session already exists (null if signed out) —

@@ -3,10 +3,7 @@ import {
   Trees, Mountain, Pickaxe, Wheat, Gem, Users, Home, Anchor, Flag, X, RotateCcw, LandPlot,
   Swords, Hourglass, Trophy, Skull, Ship, Tent, Lock, Check, Map as MapIcon, Route as RouteIcon,
 } from "lucide-react";
-import {
-  submitMatchTelemetry, getSession, onAuthChange, getIsAdmin,
-  signUpWithEmail, signInWithEmail, signOut, resetPassword,
-} from "./supabaseClient.js";
+import { submitMatchTelemetry, getSession, onAuthChange, getIsAdmin, signOut } from "./supabaseClient.js";
 
 // Bumped by hand on any change to the shape of a telemetry row — lets the
 // aggregation side (once it exists) filter out rows from a schema that no
@@ -2343,29 +2340,18 @@ function homeButtonStyle(primary) {
 }
 
 // Optional login, email + password. Playing never requires this — it only
-// adds permanent, account-linked match history (see Battle Log link below
-// and matches.user_id in schema.sql). Collapsed to a single "Log in" link
-// until clicked, so it never competes for attention with Start.
-function AuthPanel({ session, isAdmin, onSignUp, onSignIn, onSignOut, onResetPassword }) {
-  const [mode, setMode] = useState("closed"); // "closed" | "signin" | "signup" | "reset"
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState(null);
-  const [info, setInfo] = useState(null);
-  const [busy, setBusy] = useState(false);
-
+// adds permanent, account-linked match history (see the Match History link
+// below and matches.user_id in schema.sql). The actual sign-in/sign-up form
+// lives on its own page (public/login.html), not inline here — Tyler's
+// call: "the login button i think should take you to a whole other page
+// kinda like how the battle logs screen is different." This component just
+// shows current status: signed in (with a Log out button, no navigation
+// needed for that) or a plain link to the login page.
+function AuthPanel({ session, isAdmin, onSignOut }) {
   const linkStyle = {
     background: "transparent", border: "none", color: INK_MUTED,
     fontSize: 11, fontFamily: SANS, textDecoration: "underline", cursor: "pointer", padding: 0,
   };
-  const inputStyle = {
-    width: "100%", padding: "7px 9px", fontSize: 12, fontFamily: SANS,
-    border: `1px solid ${PANEL_BORDER}`, borderRadius: 6, background: "#FBF6E8", color: INK,
-  };
-  const tabStyle = (active) => ({
-    background: "transparent", border: "none", color: active ? INK : INK_MUTED,
-    fontSize: 11.5, fontFamily: SANS, fontWeight: active ? 700 : 400, cursor: "pointer", padding: "2px 0",
-  });
 
   if (session) {
     return (
@@ -2379,67 +2365,14 @@ function AuthPanel({ session, isAdmin, onSignUp, onSignIn, onSignOut, onResetPas
     );
   }
 
-  if (mode === "closed") {
-    return (
-      <button onClick={() => setMode("signin")} style={{ ...linkStyle, alignSelf: "flex-end" }}>
-        Log in to save your match history
-      </button>
-    );
-  }
-
-  async function submit(e) {
-    e.preventDefault();
-    setError(null); setInfo(null); setBusy(true);
-    if (mode === "reset") {
-      const { error: err } = await onResetPassword(email);
-      setBusy(false);
-      if (err) setError(err); else setInfo("Check your email for a reset link.");
-      return;
-    }
-    const { error: err } = await (mode === "signup" ? onSignUp(email, password) : onSignIn(email, password));
-    setBusy(false);
-    if (err) setError(err);
-    else if (mode === "signup") setInfo("Check your email to confirm your account, then log in.");
-    // A successful sign-in updates `session` via the auth listener up in
-    // TerritoryPrototype — this component just re-renders into the
-    // signed-in branch above once that happens, no extra state needed here.
-  }
-
   return (
-    <form onSubmit={submit} style={{ width: "100%", display: "flex", flexDirection: "column", gap: 6, textAlign: "left" }}>
-      <div style={{ display: "flex", gap: 12 }}>
-        <button type="button" onClick={() => { setMode("signin"); setError(null); setInfo(null); }} style={tabStyle(mode === "signin")}>Log in</button>
-        <button type="button" onClick={() => { setMode("signup"); setError(null); setInfo(null); }} style={tabStyle(mode === "signup")}>Sign up</button>
-      </div>
-      <input type="email" required autoComplete="email" placeholder="Email" value={email}
-        onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
-      {mode !== "reset" && (
-        <input type="password" required autoComplete={mode === "signup" ? "new-password" : "current-password"}
-          placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle} />
-      )}
-      {error && <div style={{ fontSize: 10.5, color: RUST }}>{error}</div>}
-      {info && <div style={{ fontSize: 10.5, color: FOREST }}>{info}</div>}
-      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-        <button type="submit" disabled={busy} style={{
-          ...homeButtonStyle(true), padding: "6px 14px", fontSize: 11.5,
-          opacity: busy ? 0.6 : 1, cursor: busy ? "default" : "pointer",
-        }}>
-          {busy ? "…" : mode === "signup" ? "Create account" : mode === "reset" ? "Send reset link" : "Log in"}
-        </button>
-        {mode !== "reset" && (
-          <button type="button" onClick={() => { setMode("reset"); setError(null); setInfo(null); }} style={{ ...linkStyle, fontSize: 10 }}>
-            Forgot password?
-          </button>
-        )}
-        <button type="button" onClick={() => setMode("closed")} style={{ ...linkStyle, fontSize: 10, marginLeft: "auto" }}>
-          Cancel
-        </button>
-      </div>
-    </form>
+    <a href="/login.html" style={{ ...linkStyle, alignSelf: "flex-end" }}>
+      Log in to save your match history
+    </a>
   );
 }
 
-function HomeScreen({ savedMatch, onStart, onContinue, session, isAdmin, onSignUp, onSignIn, onSignOut, onResetPassword }) {
+function HomeScreen({ savedMatch, onStart, onContinue, session, isAdmin, onSignOut }) {
   const profile = loadPlayerProfile();
   const hasStats = profile.matchesPlayed > 0;
   const savedPhase = savedMatch?.phase;
@@ -2462,10 +2395,7 @@ function HomeScreen({ savedMatch, onStart, onContinue, session, isAdmin, onSignU
         ...CHIP, width: "100%", maxWidth: 420, padding: "34px 28px",
         display: "flex", flexDirection: "column", alignItems: "center", gap: 18, textAlign: "center",
       }}>
-        <AuthPanel
-          session={session} isAdmin={isAdmin}
-          onSignUp={onSignUp} onSignIn={onSignIn} onSignOut={onSignOut} onResetPassword={onResetPassword}
-        />
+        <AuthPanel session={session} isAdmin={isAdmin} onSignOut={onSignOut} />
 
         <Flag size={30} color={CLAIM_EDGE} strokeWidth={2.25} />
         <div>
@@ -2570,10 +2500,10 @@ function HomeScreen({ savedMatch, onStart, onContinue, session, isAdmin, onSignU
         )}
 
         <a
-          href="/battle-log.html"
+          href="/match-history.html"
           style={{ fontSize: 10.5, color: INK_MUTED, textDecoration: "underline" }}
         >
-          {isAdmin ? "Battle Log (admin — all players)" : "Battle Log — your match history"}
+          {isAdmin ? "Match History (admin — all players)" : "Match History"}
         </a>
       </div>
     </div>
@@ -2627,8 +2557,7 @@ export default function TerritoryPrototype() {
     return (
       <HomeScreen
         savedMatch={savedMatch} onStart={handleStart} onContinue={() => setScreen("game")}
-        session={session} isAdmin={isAdmin}
-        onSignUp={signUpWithEmail} onSignIn={signInWithEmail} onSignOut={signOut} onResetPassword={resetPassword}
+        session={session} isAdmin={isAdmin} onSignOut={signOut}
       />
     );
   }

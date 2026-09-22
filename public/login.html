@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Log In — Territory &amp; Economy</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600&family=Inter:wght@400;500;600&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+  :root {
+    --bg: #EFE6D0;
+    --panel: #F7F1E1;
+    --border: #C9B98E;
+    --ink: #2E2A1F;
+    --ink-muted: #6B6250;
+    --accent: #C17817;
+    --rust: #8B3A2F;
+    --rust-tint: rgba(139, 58, 47, 0.12);
+    --forest: #4C6B3E;
+    --forest-tint: rgba(76, 107, 62, 0.12);
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1C1811; --panel: #262019; --border: #4A4130;
+      --ink: #EFE6D0; --ink-muted: #A99C82;
+      --accent: #D99B4E;
+      --rust: #D08571; --rust-tint: rgba(208, 133, 113, 0.14);
+      --forest: #86AC77; --forest-tint: rgba(134, 172, 119, 0.14);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+    font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+    display: flex; align-items: center; justify-content: center; padding: 16px;
+  }
+  .card {
+    width: 100%; max-width: 360px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 30px 26px; display: flex; flex-direction: column; gap: 16px;
+  }
+  .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-family: 'Spectral', Georgia, serif; font-size: 24px; font-weight: 600; margin: 4px 0 0; }
+  .tabs { display: flex; gap: 16px; }
+  .tabs button {
+    background: none; border: none; font-family: inherit; font-size: 13px; cursor: pointer;
+    color: var(--ink-muted); padding: 2px 0;
+  }
+  .tabs button.active { color: var(--ink); font-weight: 700; }
+  input {
+    width: 100%; padding: 9px 11px; font-size: 13px; font-family: inherit;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--ink);
+  }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .btn {
+    background: var(--accent); color: #FBF6E8; border: none; border-radius: 8px;
+    padding: 10px 16px; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer;
+  }
+  .btn:disabled { opacity: 0.6; cursor: default; }
+  .btn.secondary {
+    background: transparent; color: var(--ink); border: 1px solid var(--border);
+  }
+  .link-btn {
+    background: none; border: none; color: var(--ink-muted); font-size: 11.5px;
+    font-family: inherit; text-decoration: underline; cursor: pointer; padding: 0; text-align: left;
+  }
+  a.link-btn { display: inline-block; }
+  .error-box { background: var(--rust-tint); color: var(--rust); border-radius: 6px; padding: 8px 10px; font-size: 12px; }
+  .info-box { background: var(--forest-tint); color: var(--forest); border-radius: 6px; padding: 8px 10px; font-size: 12px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <div>
+    <div class="eyebrow">Territory &amp; Economy</div>
+    <h1>Log in</h1>
+  </div>
+  <div id="content">Loading…</div>
+</div>
+
+<script>
+(function () {
+  var SUPABASE_URL = "https://fstpcnscwjlbqdtuwztq.supabase.co";
+  var SUPABASE_ANON_KEY = "sb_publishable_PCDYysMbNJNr1d0T1v59Lw_XDZwJvSu";
+  var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  var contentEl = document.getElementById("content");
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function renderAlreadySignedIn(session) {
+    contentEl.innerHTML = "";
+    contentEl.appendChild(el("div", "info-box", "You're already signed in as " + session.user.email + "."));
+    var row = el("div", "row");
+    var toGame = el("a", "btn", "Back to the game");
+    toGame.href = "/";
+    var toHistory = el("a", "btn secondary", "Match History");
+    toHistory.href = "/match-history.html";
+    row.appendChild(toGame);
+    row.appendChild(toHistory);
+    contentEl.appendChild(row);
+    var logout = el("button", "link-btn", "Log out");
+    logout.style.marginTop = "4px";
+    logout.addEventListener("click", async function () { await sb.auth.signOut(); });
+    contentEl.appendChild(logout);
+  }
+
+  function renderJustSignedIn(session) {
+    contentEl.innerHTML = "";
+    contentEl.appendChild(el("div", "info-box", "Signed in as " + session.user.email + "."));
+    var toGame = el("a", "btn", "Back to the game");
+    toGame.href = "/";
+    toGame.style.alignSelf = "flex-start";
+    contentEl.appendChild(toGame);
+  }
+
+  function renderForm() {
+    contentEl.innerHTML = "";
+    var mode = "signin"; // "signin" | "signup" | "reset"
+
+    var tabs = el("div", "tabs");
+    var signinTab = el("button", "active", "Log in");
+    var signupTab = el("button", null, "Sign up");
+    tabs.appendChild(signinTab);
+    tabs.appendChild(signupTab);
+    contentEl.appendChild(tabs);
+
+    var form = el("div");
+    form.style.display = "flex";
+    form.style.flexDirection = "column";
+    form.style.gap = "12px";
+
+    var emailField = el("div", "field");
+    emailField.appendChild(el("label", null, "Email"));
+    var emailInput = document.createElement("input");
+    emailInput.type = "email"; emailInput.required = true; emailInput.autocomplete = "email";
+    emailField.appendChild(emailInput);
+    form.appendChild(emailField);
+
+    var passField = el("div", "field");
+    passField.appendChild(el("label", null, "Password"));
+    var passInput = document.createElement("input");
+    passInput.type = "password"; passInput.required = true; passInput.autocomplete = "current-password";
+    passField.appendChild(passInput);
+    form.appendChild(passField);
+
+    var msgEl = document.createElement("div");
+    form.appendChild(msgEl);
+
+    var submitBtn = el("button", "btn", "Log in");
+    form.appendChild(submitBtn);
+
+    var forgotBtn = el("button", "link-btn", "Forgot password?");
+    form.appendChild(forgotBtn);
+
+    var backLink = el("a", "link-btn", "Back to the game");
+    backLink.href = "/";
+    form.appendChild(backLink);
+
+    contentEl.appendChild(form);
+
+    function setMode(m) {
+      mode = m;
+      signinTab.className = mode === "signin" ? "active" : "";
+      signupTab.className = mode === "signup" ? "active" : "";
+      passField.hidden = mode === "reset";
+      passInput.autocomplete = mode === "signup" ? "new-password" : "current-password";
+      submitBtn.textContent = mode === "signin" ? "Log in" : mode === "signup" ? "Create account" : "Send reset link";
+      forgotBtn.hidden = mode === "reset";
+      msgEl.innerHTML = "";
+    }
+    signinTab.addEventListener("click", function () { setMode("signin"); });
+    signupTab.addEventListener("click", function () { setMode("signup"); });
+    forgotBtn.addEventListener("click", function () { setMode("reset"); });
+
+    submitBtn.addEventListener("click", async function () {
+      var email = emailInput.value.trim();
+      var password = passInput.value;
+      if (!email || (mode !== "reset" && !password)) {
+        msgEl.innerHTML = "";
+        msgEl.appendChild(el("div", "error-box", "Enter " + (mode === "reset" ? "your email." : "an email and password.")));
+        return;
+      }
+      submitBtn.disabled = true;
+      msgEl.innerHTML = "";
+
+      var result;
+      if (mode === "reset") {
+        result = await sb.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + "/login.html" });
+      } else if (mode === "signup") {
+        result = await sb.auth.signUp({ email: email, password: password });
+      } else {
+        result = await sb.auth.signInWithPassword({ email: email, password: password });
+      }
+      submitBtn.disabled = false;
+
+      if (result.error) {
+        msgEl.appendChild(el("div", "error-box", result.error.message));
+      } else if (mode === "reset") {
+        msgEl.appendChild(el("div", "info-box", "Check your email for a reset link."));
+      } else if (mode === "signup" && !result.data.session) {
+        // Only happens if email confirmation is turned on in Supabase — with
+        // it off, signUp returns a session immediately and the auth listener
+        // below takes over instead of this branch ever running.
+        msgEl.appendChild(el("div", "info-box", "Check your email to confirm your account, then log in."));
+      }
+      // A successful sign-in (or a signup with confirmation off) fires
+      // onAuthStateChange below, which re-renders into the signed-in view.
+    });
+  }
+
+  sb.auth.onAuthStateChange(function (_event, session) {
+    if (session) renderJustSignedIn(session);
+  });
+
+  sb.auth.getSession().then(function (res) {
+    if (res.data.session) renderAlreadySignedIn(res.data.session);
+    else renderForm();
+  });
+})();
+</script>
+</body>
+</html>
