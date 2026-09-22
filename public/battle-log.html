@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Battle Log — Territory &amp; Economy</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600&family=Inter:wght@400;500;600&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
   :root {
     --bg: #EFE6D0;
@@ -44,13 +45,14 @@
   .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
   h1 { font-size: 30px; font-weight: 600; }
   .tagline { font-size: 13.5px; color: var(--ink-muted); line-height: 1.5; }
-  #refresh-btn {
+  #refresh-btn, .btn {
     background: var(--panel); color: var(--ink); border: 1px solid var(--border);
     border-radius: 8px; padding: 7px 12px; font-size: 12px; font-family: inherit;
     cursor: pointer; white-space: nowrap;
   }
-  #refresh-btn:hover { background: var(--accent-tint); }
-  #refresh-btn:disabled { opacity: 0.5; cursor: default; }
+  #refresh-btn:hover, .btn:hover { background: var(--accent-tint); }
+  #refresh-btn:disabled, .btn:disabled { opacity: 0.5; cursor: default; }
+  .btn.primary { background: var(--accent); color: #FBF6E8; border: none; }
   #status-line { font-size: 10.5px; color: var(--ink-muted); }
   .caveat {
     background: var(--accent-tint); border: 1px solid var(--accent); border-radius: 8px;
@@ -60,6 +62,29 @@
   .error-box {
     background: var(--rust-tint); border: 1px solid var(--rust); border-radius: 8px;
     padding: 12px 14px; font-size: 12.5px; line-height: 1.55; color: var(--rust);
+  }
+  .info-box {
+    background: var(--forest-tint); border: 1px solid var(--forest); border-radius: 8px;
+    padding: 10px 14px; font-size: 12px; line-height: 1.5; color: var(--forest);
+  }
+  .account-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    font-size: 11.5px; color: var(--ink-muted); flex-wrap: wrap;
+  }
+  .admin-tag { color: var(--accent); font-weight: 700; margin-left: 6px; }
+  .auth-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 20px; display: flex; flex-direction: column; gap: 10px; max-width: 340px;
+  }
+  .auth-tabs { display: flex; gap: 14px; }
+  .auth-tabs button {
+    background: none; border: none; font-family: inherit; font-size: 12.5px; cursor: pointer;
+    color: var(--ink-muted); padding: 2px 0;
+  }
+  .auth-tabs button.active { color: var(--ink); font-weight: 700; }
+  .auth-card input {
+    width: 100%; padding: 8px 10px; font-size: 12.5px; font-family: inherit;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--ink);
   }
   .stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
   .stat-tile {
@@ -125,11 +150,12 @@
     <div class="head-row">
       <div>
         <div class="eyebrow">Territory &amp; Economy</div>
-        <h1>Battle Log</h1>
+        <h1 id="page-title">Battle Log</h1>
       </div>
-      <button id="refresh-btn">Refresh</button>
+      <button id="refresh-btn" class="btn" hidden>Refresh</button>
     </div>
-    <div class="tagline">Live match data pulled straight from Supabase — refreshes automatically, or hit Refresh anytime.</div>
+    <div class="tagline" id="tagline">Sign in to see your permanent match history.</div>
+    <div id="account-row" class="account-row" hidden></div>
     <div id="status-line"></div>
   </header>
 
@@ -138,9 +164,8 @@
   </div>
 
   <footer>
-    Reads directly from the <code>matches</code> table via the same public/anon key the game itself uses to submit
-    match results — that key is insert + read only, it can never edit or delete anything. Auto-refreshes every 60s
-    while this page is open.
+    Only you (or an admin) can ever see your matches — access is enforced by the database itself (row-level
+    security), not just hidden in this page. Auto-refreshes every 60s while this page is open and you're signed in.
   </footer>
 </div>
 
@@ -151,6 +176,8 @@
   var OUTLIER_MS = 20 * 60 * 1000; // matches longer than this are flagged as probably-idle, not real play
   var AUTO_REFRESH_MS = 60000;
 
+  var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
   var DEF_NAMES = {
     lumberCamp: "Lumber Camp", quarry: "Quarry", ironMine: "Iron Mine",
     fishery: "Fishery", house: "House", barracks: "Barracks"
@@ -159,6 +186,13 @@
   var contentEl = document.getElementById("content");
   var statusEl = document.getElementById("status-line");
   var refreshBtn = document.getElementById("refresh-btn");
+  var accountRowEl = document.getElementById("account-row");
+  var taglineEl = document.getElementById("tagline");
+  var titleEl = document.getElementById("page-title");
+
+  var refreshTimer = null;
+  var currentSession = null;
+  var currentIsAdmin = false;
 
   function fmtClock(ms) {
     if (ms == null) return "—";
@@ -189,16 +223,120 @@
     return first ? first.defId : null;
   }
 
+  function setStatus(text) {
+    statusEl.textContent = text;
+  }
+
+  function showError(message) {
+    contentEl.innerHTML = "";
+    var box = el("div", "error-box");
+    box.textContent = message;
+    contentEl.appendChild(box);
+  }
+
+  /* ---- logged-out state: a compact sign-in/sign-up form, same idea as the
+     one on the game's home screen (they share the same Supabase Auth
+     session via localStorage, so logging in on either page logs you in on
+     both). ---- */
+  function renderAuthForm() {
+    refreshBtn.hidden = true;
+    accountRowEl.hidden = true;
+    taglineEl.textContent = "Sign in to see your permanent match history.";
+    titleEl.textContent = "Battle Log";
+    contentEl.innerHTML = "";
+
+    var mode = "signin";
+    var card = el("div", "auth-card");
+    var tabs = el("div", "auth-tabs");
+    var signinTab = el("button", "active", "Log in");
+    var signupTab = el("button", null, "Sign up");
+    tabs.appendChild(signinTab);
+    tabs.appendChild(signupTab);
+    card.appendChild(tabs);
+
+    var emailInput = document.createElement("input");
+    emailInput.type = "email"; emailInput.required = true; emailInput.placeholder = "Email";
+    var passInput = document.createElement("input");
+    passInput.type = "password"; passInput.required = true; passInput.placeholder = "Password";
+    card.appendChild(emailInput);
+    card.appendChild(passInput);
+
+    var msgEl = el("div", "note");
+    card.appendChild(msgEl);
+
+    var submitBtn = el("button", "btn primary", "Log in");
+    submitBtn.style.alignSelf = "flex-start";
+    card.appendChild(submitBtn);
+
+    var backLink = el("a", null, "Back to the game");
+    backLink.href = "/";
+    backLink.style.fontSize = "11px";
+    card.appendChild(backLink);
+
+    function setMode(m) {
+      mode = m;
+      signinTab.className = mode === "signin" ? "active" : "";
+      signupTab.className = mode === "signup" ? "active" : "";
+      submitBtn.textContent = mode === "signin" ? "Log in" : "Create account";
+      msgEl.textContent = "";
+    }
+    signinTab.addEventListener("click", function () { setMode("signin"); });
+    signupTab.addEventListener("click", function () { setMode("signup"); });
+
+    submitBtn.addEventListener("click", async function () {
+      var email = emailInput.value.trim();
+      var password = passInput.value;
+      if (!email || !password) { msgEl.textContent = "Enter an email and password."; return; }
+      submitBtn.disabled = true;
+      msgEl.textContent = "";
+      var result = mode === "signin"
+        ? await sb.auth.signInWithPassword({ email: email, password: password })
+        : await sb.auth.signUp({ email: email, password: password });
+      submitBtn.disabled = false;
+      if (result.error) {
+        msgEl.textContent = result.error.message;
+      } else if (mode === "signup") {
+        msgEl.textContent = "Check your email to confirm your account, then log in.";
+      }
+      // A successful sign-in fires onAuthStateChange below, which re-renders
+      // into the signed-in view automatically.
+    });
+
+    contentEl.appendChild(card);
+  }
+
+  function renderAccountRow() {
+    accountRowEl.hidden = false;
+    accountRowEl.innerHTML = "";
+    var left = el("span", null,
+      "Signed in as " + currentSession.user.email +
+      (currentIsAdmin ? '<span class="admin-tag">· Admin</span>' : ""));
+    var logoutBtn = el("button", "btn", "Log out");
+    logoutBtn.addEventListener("click", async function () {
+      await sb.auth.signOut();
+    });
+    accountRowEl.appendChild(left);
+    accountRowEl.appendChild(logoutBtn);
+  }
+
   function render(matches) {
+    titleEl.textContent = currentIsAdmin ? "Battle Log — Admin" : "Battle Log";
+    taglineEl.textContent = currentIsAdmin
+      ? "Every real match recorded, across every player."
+      : "Your own match history — live, and permanent as long as you're signed in.";
+
     contentEl.innerHTML = "";
 
     if (matches.length === 0) {
-      contentEl.appendChild(el("div", "empty-state", "No matches recorded yet — play one to see it show up here."));
+      contentEl.appendChild(el("div", "empty-state",
+        currentIsAdmin
+          ? "No matches recorded yet."
+          : "No matches recorded to this account yet — play one while signed in to see it show up here."));
       return;
     }
 
-    var caveat = el("div", "caveat");
-    if (matches.length < 15) {
+    if (currentIsAdmin && matches.length < 15) {
+      var caveat = el("div", "caveat");
       caveat.innerHTML = "<strong>Early data — read it as anecdotes, not trends.</strong> Only " + matches.length +
         " match" + (matches.length === 1 ? "" : "es") + " recorded so far. Averages here can swing a lot with " +
         "just one more match until there's real volume.";
@@ -229,7 +367,8 @@
     var openingRanked = Object.entries(openingCounts).sort(function (a, b) { return b[1] - a[1]; });
     if (openingRanked.length > 0) {
       var openSection = el("section");
-      openSection.appendChild(el("div", "section-title", "Most common opening building"));
+      openSection.appendChild(el("div", "section-title",
+        currentIsAdmin ? "Most common opening building" : "Your most common opening building"));
       var maxCount = openingRanked[0][1];
       var rankList = el("div", "rank-list");
       openingRanked.forEach(function (pair) {
@@ -249,7 +388,8 @@
 
     // Per-match cards, newest first.
     var matchSection = el("section");
-    matchSection.appendChild(el("div", "section-title", "Every recorded match"));
+    matchSection.appendChild(el("div", "section-title",
+      currentIsAdmin ? "Every recorded match" : "Your matches"));
     var cardsWrap = el("div");
     cardsWrap.style.display = "flex";
     cardsWrap.style.flexDirection = "column";
@@ -308,31 +448,16 @@
     contentEl.appendChild(matchSection);
   }
 
-  function setStatus(text) {
-    statusEl.textContent = text;
-  }
-
-  function showError(message) {
-    contentEl.innerHTML = "";
-    var box = el("div", "error-box");
-    box.textContent = message;
-    contentEl.appendChild(box);
-  }
-
-  async function load() {
+  async function loadMatches() {
     refreshBtn.disabled = true;
     setStatus("Loading…");
     try {
-      var res = await fetch(
-        SUPABASE_URL + "/rest/v1/matches?select=*&order=created_at.asc",
-        { headers: { apikey: SUPABASE_ANON_KEY, Authorization: "Bearer " + SUPABASE_ANON_KEY } }
-      );
-      if (!res.ok) throw new Error("Request failed (" + res.status + ")");
-      var rows = await res.json();
-      // Exclude the one manual RLS-verification row from an earlier debugging
-      // session — not a real match, tagged with this app_version on purpose
-      // so it's easy to filter out here.
-      var real = rows.filter(function (r) { return r.app_version !== "test-verify-only"; });
+      var { data, error } = await sb.from("matches").select("*").order("created_at", { ascending: true });
+      if (error) throw new Error(error.message);
+      // Exclude the one manual RLS-verification row from an earlier
+      // debugging session — not a real match, tagged with this app_version
+      // on purpose so it's easy to filter out here.
+      var real = data.filter(function (r) { return r.app_version !== "test-verify-only"; });
       render(real);
       setStatus("Updated " + new Date().toLocaleTimeString());
     } catch (err) {
@@ -343,9 +468,36 @@
     }
   }
 
-  refreshBtn.addEventListener("click", load);
-  load();
-  setInterval(load, AUTO_REFRESH_MS);
+  async function enterSignedInState(session) {
+    currentSession = session;
+    refreshBtn.hidden = false;
+    var { data: profile } = await sb.from("profiles").select("is_admin").eq("id", session.user.id).single();
+    currentIsAdmin = profile?.is_admin ?? false;
+    renderAccountRow();
+    await loadMatches();
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = setInterval(loadMatches, AUTO_REFRESH_MS);
+  }
+
+  function enterSignedOutState() {
+    currentSession = null;
+    currentIsAdmin = false;
+    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+    setStatus("");
+    renderAuthForm();
+  }
+
+  refreshBtn.addEventListener("click", loadMatches);
+
+  sb.auth.onAuthStateChange(function (_event, session) {
+    if (session) enterSignedInState(session);
+    else enterSignedOutState();
+  });
+
+  sb.auth.getSession().then(function (res) {
+    if (res.data.session) enterSignedInState(res.data.session);
+    else enterSignedOutState();
+  });
 })();
 </script>
 </body>
