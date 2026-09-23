@@ -2332,10 +2332,10 @@ function Match({ level, isTest, userId, onExit }) {
 function homeButtonStyle(primary) {
   return {
     display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-    padding: "11px 18px", borderRadius: 8, fontFamily: SANS, fontSize: 13.5, fontWeight: 600,
-    cursor: "pointer", border: primary ? "none" : `1px solid ${PANEL_BORDER}`,
-    background: primary ? CLAIM_EDGE : "transparent",
-    color: primary ? "#FBF6E8" : INK,
+    padding: "15px 22px", borderRadius: 9, fontFamily: SANS, fontSize: 15, fontWeight: 600,
+    cursor: "pointer", border: primary ? "none" : "1px solid var(--tp-border)",
+    background: primary ? "var(--tp-accent)" : "transparent",
+    color: primary ? "#FFFDF9" : "var(--tp-ink)",
   };
 }
 
@@ -2349,16 +2349,16 @@ function homeButtonStyle(primary) {
 // needed for that) or a plain link to the login page.
 function AuthPanel({ session, isAdmin, onSignOut }) {
   const linkStyle = {
-    background: "transparent", border: "none", color: INK_MUTED,
+    background: "transparent", border: "none", color: "var(--tp-ink-muted)",
     fontSize: 11, fontFamily: SANS, textDecoration: "underline", cursor: "pointer", padding: 0,
   };
 
   if (session) {
     return (
-      <div style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 11, color: INK_MUTED }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, fontSize: 11, color: "var(--tp-ink-muted)" }}>
         <span>
           Signed in as {session.user.email}
-          {isAdmin && <span style={{ marginLeft: 6, color: CLAIM_EDGE, fontWeight: 700 }}>· Admin</span>}
+          {isAdmin && <span style={{ marginLeft: 6, color: "var(--tp-accent)", fontWeight: 700 }}>· Admin</span>}
         </span>
         <button onClick={onSignOut} style={linkStyle}>Log out</button>
       </div>
@@ -2366,11 +2366,56 @@ function AuthPanel({ session, isAdmin, onSignOut }) {
   }
 
   return (
-    <a href="/login.html" style={{ ...linkStyle, alignSelf: "flex-end" }}>
+    <a href="/login.html" style={linkStyle}>
       Log in to save your match history
     </a>
   );
 }
+
+// Home-screen theme — deliberately just 2 colors + the game's existing
+// orange accent (Tyler: "our colors be white or black depending on the
+// light or dark mode and then orange like we already have it"), warmed off
+// pure #000/#FFF slightly so it doesn't read as stark/clinical next to a
+// warm orange. Scoped to the home screen + account pages (login.html,
+// match-history.html use the same values) — the actual game map keeps its
+// own terrain/resource colors, which exist for gameplay legibility, not
+// decoration (confirmed with Tyler before touching anything).
+const HOME_THEME_CSS = `
+  .tp-home {
+    --tp-bg: #FAF7F2;
+    --tp-ink: #1E1912;
+    --tp-ink-muted: rgba(30,25,18,0.62);
+    --tp-border: rgba(30,25,18,0.16);
+    --tp-panel: rgba(30,25,18,0.035);
+    --tp-accent: #C17817;
+    --tp-accent-tint: rgba(193,120,23,0.14);
+  }
+  @media (prefers-color-scheme: dark) {
+    .tp-home {
+      --tp-bg: #17130F;
+      --tp-ink: #F5F0E6;
+      --tp-ink-muted: rgba(245,240,230,0.62);
+      --tp-border: rgba(245,240,230,0.2);
+      --tp-panel: rgba(245,240,230,0.06);
+      --tp-accent: #C17817;
+      --tp-accent-tint: rgba(193,120,23,0.18);
+    }
+  }
+  .tp-home { display: flex; position: relative; overflow: hidden; }
+  .tp-home-wrap { position: relative; z-index: 1; width: 100%; max-width: 1080px; margin: auto; padding: 56px 32px 80px; display: flex; flex-direction: column; gap: 46px; }
+  .tp-home-cols { display: flex; flex-direction: column; gap: 40px; }
+  @media (min-width: 760px) {
+    .tp-home-cols { flex-direction: row; align-items: flex-start; }
+    .tp-home-col { flex: 1; min-width: 0; }
+  }
+  /* A single oversized, very faint flag watermark — fills the empty space
+     around the content with something intentional instead of a void,
+     without adding a new color or competing with the real UI. */
+  .tp-home-watermark {
+    position: absolute; top: 50%; right: -6%; transform: translateY(-50%);
+    width: 60vw; max-width: 820px; height: auto; opacity: 0.05; z-index: 0; pointer-events: none;
+  }
+`;
 
 function HomeScreen({ savedMatch, onStart, onContinue, session, isAdmin, onSignOut }) {
   const profile = loadPlayerProfile();
@@ -2386,125 +2431,139 @@ function HomeScreen({ savedMatch, onStart, onContinue, session, isAdmin, onSignO
   const sandboxLabel = isAdmin ? "test match" : "sandbox";
 
   return (
-    <div style={{
-      position: "fixed", inset: 0, background: PAGE_BG, fontFamily: SANS,
-      display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+    <div className="tp-home" style={{
+      position: "fixed", inset: 0, overflow: "auto",
+      background: "var(--tp-bg)", color: "var(--tp-ink)", fontFamily: SANS,
     }}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Spectral:wght@500;600&family=Inter:wght@400;500;600&display=swap');`}</style>
-      <div style={{
-        ...CHIP, width: "100%", maxWidth: 420, padding: "34px 28px",
-        display: "flex", flexDirection: "column", alignItems: "center", gap: 18, textAlign: "center",
-      }}>
-        <AuthPanel session={session} isAdmin={isAdmin} onSignOut={onSignOut} />
-
-        <Flag size={30} color={CLAIM_EDGE} strokeWidth={2.25} />
-        <div>
-          <div style={{ fontFamily: SERIF, fontSize: 27, fontWeight: 600, color: INK }}>Territory &amp; Economy</div>
-          <div style={{ fontSize: 12.5, color: INK_MUTED, marginTop: 6, lineHeight: 1.5 }}>
-            Claim land, build an economy, and take the enemy's flag before they take yours.
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Spectral:wght@500;600&family=Inter:wght@400;500;600&display=swap');
+        ${HOME_THEME_CSS}
+      `}</style>
+      <Flag className="tp-home-watermark" strokeWidth={1} />
+      <div className="tp-home-wrap">
+        {/* Header — full width now instead of boxed into a narrow card, so
+            the page reads as designed for the actual screen it's on rather
+            than a phone-width panel stranded in empty space. */}
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 24, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+            <Flag size={46} color="var(--tp-accent)" strokeWidth={2} />
+            <div>
+              <div style={{ fontFamily: SERIF, fontSize: 42, fontWeight: 600, lineHeight: 1.1 }}>Territory &amp; Economy</div>
+              <div style={{ fontSize: 15, color: "var(--tp-ink-muted)", marginTop: 6, lineHeight: 1.5 }}>
+                Claim land, build an economy, and take the enemy's flag before they take yours.
+              </div>
+            </div>
           </div>
+          <AuthPanel session={session} isAdmin={isAdmin} onSignOut={onSignOut} />
         </div>
 
-        {hasStats && (
-          <div style={{
-            width: "100%", padding: "12px 14px", background: "#FBF6E8",
-            border: `1px solid ${PANEL_BORDER}`, borderRadius: 6, textAlign: "left",
-          }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: INK, marginBottom: 5, letterSpacing: 0.02 }}>
-              Your record
-            </div>
-            <div style={{ fontSize: 11.5, color: INK_MUTED, lineHeight: 1.8 }}>
-              <div>Matches played: {profile.matchesPlayed}</div>
-              {profile.firstBarracksMs.best != null && (
-                <div>Fastest to first barracks: {fmtClock(profile.firstBarracksMs.best)}</div>
-              )}
-              {profile.firstAttackMs.best != null && (
-                <div>Fastest to first attack: {fmtClock(profile.firstAttackMs.best)}</div>
-              )}
-              {profile.firstAttackPower.best != null && (
-                <div>Strongest opening attack: {Math.round(profile.firstAttackPower.best)} power</div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Campaign map — a simple winding trail of level nodes. Every level
-            plays identically right now (same AI, same random map) — this is
-            just the progression/unlock layer; per-level tuning comes later. */}
-        <div style={{ width: "100%", textAlign: "left" }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: INK, marginBottom: 10, letterSpacing: 0.02 }}>
-            Campaign
-          </div>
-          <div style={{ position: "relative", display: "flex", flexDirection: "column", gap: 12, padding: "4px 0" }}>
-            <div style={{
-              position: "absolute", left: "50%", top: 4, bottom: 4, width: 2,
-              background: PANEL_BORDER, transform: "translateX(-1px)", zIndex: 0,
-            }} />
-            {Array.from({ length: LEVEL_COUNT }, (_, i) => i + 1).map((lvl) => {
-              const locked = lvl > levelProgress.unlocked;
-              const completed = lvl < levelProgress.unlocked;
-              const isSelected = lvl === selectedLevel;
-              const alignRight = lvl % 2 === 0;
-              return (
-                <div key={lvl} style={{ display: "flex", justifyContent: alignRight ? "flex-end" : "flex-start", zIndex: 1 }}>
-                  <button
-                    onClick={() => !locked && setSelectedLevel(lvl)}
-                    disabled={locked}
-                    title={locked ? "Beat the previous level to unlock" : `Level ${lvl}`}
-                    style={{
-                      width: 44, height: 44, borderRadius: "50%",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      border: `2px solid ${locked ? PANEL_BORDER : isSelected ? CLAIM_EDGE : completed ? FOREST : PANEL_BORDER}`,
-                      background: locked ? PANEL_BG : isSelected ? CLAIM_TINT : completed ? "rgba(76,107,62,0.14)" : PANEL_BG,
-                      color: locked ? INK_MUTED : completed ? FOREST : INK,
-                      cursor: locked ? "not-allowed" : "pointer",
-                      fontFamily: SERIF, fontWeight: 600, fontSize: 15,
-                      boxShadow: isSelected ? "0 0 0 3px rgba(193,120,23,0.18)" : "none",
-                    }}
-                  >
-                    {locked ? <Lock size={15} /> : completed ? <Check size={18} /> : lvl}
-                  </button>
+        <div className="tp-home-cols">
+          <div className="tp-home-col" style={{ display: "flex", flexDirection: "column", gap: 32 }}>
+            {hasStats && (
+              <div style={{
+                width: "100%", padding: "20px 22px", background: "var(--tp-panel)",
+                border: "1px solid var(--tp-border)", borderRadius: 10, textAlign: "left",
+              }}>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 9, letterSpacing: 0.02 }}>
+                  Your record
                 </div>
-              );
-            })}
+                <div style={{ fontSize: 13.5, color: "var(--tp-ink-muted)", lineHeight: 2 }}>
+                  <div>Matches played: {profile.matchesPlayed}</div>
+                  {profile.firstBarracksMs.best != null && (
+                    <div>Fastest to first barracks: {fmtClock(profile.firstBarracksMs.best)}</div>
+                  )}
+                  {profile.firstAttackMs.best != null && (
+                    <div>Fastest to first attack: {fmtClock(profile.firstAttackMs.best)}</div>
+                  )}
+                  {profile.firstAttackPower.best != null && (
+                    <div>Strongest opening attack: {Math.round(profile.firstAttackPower.best)} power</div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Campaign map — a simple winding trail of level nodes. Every
+                level plays identically right now (same AI, same random
+                map) — this is just the progression/unlock layer; per-level
+                tuning comes later. */}
+            <div style={{ width: "100%", textAlign: "left" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 16, letterSpacing: 0.02 }}>
+                Campaign
+              </div>
+              <div style={{ position: "relative", display: "flex", flexDirection: "column", gap: 18, padding: "4px 0" }}>
+                <div style={{
+                  position: "absolute", left: "50%", top: 4, bottom: 4, width: 2,
+                  background: "var(--tp-border)", transform: "translateX(-1px)", zIndex: 0,
+                }} />
+                {Array.from({ length: LEVEL_COUNT }, (_, i) => i + 1).map((lvl) => {
+                  const locked = lvl > levelProgress.unlocked;
+                  const completed = lvl < levelProgress.unlocked;
+                  const isSelected = lvl === selectedLevel;
+                  const alignRight = lvl % 2 === 0;
+                  return (
+                    <div key={lvl} style={{ display: "flex", justifyContent: alignRight ? "flex-end" : "flex-start", zIndex: 1 }}>
+                      <button
+                        onClick={() => !locked && setSelectedLevel(lvl)}
+                        disabled={locked}
+                        title={locked ? "Beat the previous level to unlock" : `Level ${lvl}`}
+                        style={{
+                          width: 60, height: 60, borderRadius: "50%",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          border: `3px solid ${locked || !isSelected && !completed ? "var(--tp-border)" : "var(--tp-accent)"}`,
+                          background: isSelected ? "var(--tp-accent-tint)" : completed ? "var(--tp-panel)" : "transparent",
+                          color: locked ? "var(--tp-ink-muted)" : "var(--tp-accent)",
+                          cursor: locked ? "not-allowed" : "pointer",
+                          fontFamily: SERIF, fontWeight: 600, fontSize: 20,
+                          boxShadow: isSelected ? "0 0 0 4px var(--tp-accent-tint)" : "none",
+                        }}
+                      >
+                        {locked ? <Lock size={20} /> : completed ? <Check size={24} /> : lvl}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className="tp-home-col" style={{ display: "flex", flexDirection: "column", gap: 22 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%" }}>
+              {isSavedLevel && (
+                <button onClick={onContinue} style={homeButtonStyle(true)}>
+                  {savedMatch?.isTest ? `Continue ${sandboxLabel}` : `Continue Level ${selectedLevel}`}
+                  {savedPhase === "won" ? " — victory!" : savedPhase === "lost" ? " — defeat" : ""}
+                </button>
+              )}
+              <button onClick={() => onStart(selectedLevel)} style={homeButtonStyle(!isSavedLevel)}>
+                {isSavedLevel ? "Restart level" : `Start Level ${selectedLevel}`}
+              </button>
+              <button
+                onClick={() => onStart(selectedLevel, true)}
+                title="Loaded with a big resource stockpile so you can build/attack right away. Doesn't count toward your stats, campaign progress, or the match dataset."
+                style={{
+                  background: "transparent", border: "none", color: "var(--tp-ink-muted)",
+                  fontSize: 12, fontFamily: SANS, textDecoration: "underline",
+                  cursor: "pointer", padding: "2px 0", textAlign: "left",
+                }}
+              >
+                Start {sandboxLabel} (unlimited resources, doesn't count)
+              </button>
+            </div>
+
+            {hasStats && (
+              <div style={{ fontSize: 11.5, color: "var(--tp-ink-muted)", lineHeight: 1.6 }}>
+                The AI reads your best times each match to calibrate its own pace and how big an army it commits with.
+              </div>
+            )}
+
+            <a
+              href="/match-history.html"
+              style={{ fontSize: 12, color: "var(--tp-ink-muted)", textDecoration: "underline" }}
+            >
+              {isAdmin ? "Match History (admin — all players)" : "Match History"}
+            </a>
           </div>
         </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, width: "100%" }}>
-          {isSavedLevel && (
-            <button onClick={onContinue} style={homeButtonStyle(true)}>
-              {savedMatch?.isTest ? `Continue ${sandboxLabel}` : `Continue Level ${selectedLevel}`}
-              {savedPhase === "won" ? " — victory!" : savedPhase === "lost" ? " — defeat" : ""}
-            </button>
-          )}
-          <button onClick={() => onStart(selectedLevel)} style={homeButtonStyle(!isSavedLevel)}>
-            {isSavedLevel ? "Restart level" : `Start Level ${selectedLevel}`}
-          </button>
-          <button
-            onClick={() => onStart(selectedLevel, true)}
-            title="Loaded with a big resource stockpile so you can build/attack right away. Doesn't count toward your stats, campaign progress, or the match dataset."
-            style={{
-              background: "transparent", border: "none", color: INK_MUTED,
-              fontSize: 10.5, fontFamily: SANS, textDecoration: "underline",
-              cursor: "pointer", padding: "2px 0",
-            }}
-          >
-            Start {sandboxLabel} (unlimited resources, doesn't count)
-          </button>
-        </div>
-
-        {hasStats && (
-          <div style={{ fontSize: 10, color: INK_MUTED, lineHeight: 1.5 }}>
-            The AI reads your best times each match to calibrate its own pace and how big an army it commits with.
-          </div>
-        )}
-
-        <a
-          href="/match-history.html"
-          style={{ fontSize: 10.5, color: INK_MUTED, textDecoration: "underline" }}
-        >
-          {isAdmin ? "Match History (admin — all players)" : "Match History"}
-        </a>
       </div>
     </div>
   );

@@ -7,29 +7,34 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600&family=Inter:wght@400;500;600&display=swap">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
+  /* Theme: just 2 warm neutrals (white/black, warmed off pure to avoid a
+     clinical look next to the orange) + the game's existing orange accent —
+     same tokens as the home screen and login page, see TerritoryPrototype
+     .jsx's HOME_THEME_CSS. Status colors (rust/forest) stay separate — they
+     mean won/lost, not part of "the theme". */
   :root {
-    --bg: #EFE6D0;
-    --panel: #F7F1E1;
-    --border: #C9B98E;
-    --ink: #2E2A1F;
-    --ink-muted: #6B6250;
+    --bg: #FAF7F2;
+    --panel: rgba(30,25,18,0.035);
+    --border: rgba(30,25,18,0.16);
+    --ink: #1E1912;
+    --ink-muted: rgba(30,25,18,0.62);
     --accent: #C17817;
     --accent-tint: rgba(193, 120, 23, 0.14);
     --rust: #8B3A2F;
     --rust-tint: rgba(139, 58, 47, 0.12);
     --forest: #4C6B3E;
     --forest-tint: rgba(76, 107, 62, 0.12);
-    --track: rgba(46, 42, 31, 0.1);
+    --track: rgba(30,25,18,0.1);
     color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #1C1811; --panel: #262019; --border: #4A4130;
-      --ink: #EFE6D0; --ink-muted: #A99C82;
-      --accent: #D99B4E; --accent-tint: rgba(217, 155, 78, 0.16);
+      --bg: #17130F; --panel: rgba(245,240,230,0.06); --border: rgba(245,240,230,0.2);
+      --ink: #F5F0E6; --ink-muted: rgba(245,240,230,0.62);
+      --accent: #C17817; --accent-tint: rgba(193, 120, 23, 0.18);
       --rust: #D08571; --rust-tint: rgba(208, 133, 113, 0.14);
       --forest: #86AC77; --forest-tint: rgba(134, 172, 119, 0.14);
-      --track: rgba(239, 230, 208, 0.12);
+      --track: rgba(245,240,230, 0.12);
     }
   }
   * { box-sizing: border-box; }
@@ -241,6 +246,7 @@
     var backLink = el("a", null, "Back to the game");
     backLink.href = "/";
     backLink.style.fontSize = "11px";
+    backLink.style.color = "var(--ink-muted)";
     card.appendChild(backLink);
     contentEl.appendChild(card);
   }
