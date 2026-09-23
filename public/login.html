@@ -45,6 +45,12 @@
     background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
     padding: 30px 26px; display: flex; flex-direction: column; gap: 16px;
   }
+  /* #content's own children need their own gap too -- the .card gap above
+     only spaces .card's direct children (the header, and #content as one
+     block), not whatever gets rendered inside #content. Without this,
+     everything appended into #content (the success message, the countdown,
+     etc.) stacks with zero space between and reads as overlapping. */
+  #content { display: flex; flex-direction: column; gap: 14px; }
   .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
   h1 { font-family: 'Spectral', Georgia, serif; font-size: 24px; font-weight: 600; margin: 4px 0 0; }
   .tabs { display: flex; gap: 16px; }
@@ -135,10 +141,9 @@
     countdownEl.style.color = "var(--ink-muted)";
     contentEl.appendChild(countdownEl);
 
-    var toGame = el("a", "btn", "Back to the game now");
-    toGame.href = "/";
-    toGame.style.alignSelf = "flex-start";
-    contentEl.appendChild(toGame);
+    // No manual "back to the game" button here (Tyler asked for it gone) --
+    // the countdown below redirects on its own, so there's nothing left for
+    // a button to do except sit there and clutter a very short-lived screen.
 
     // Per Tyler: "make it say 'Login Successful' and then like 'redirecting
     // in 5' and then it counts down before going back down."
