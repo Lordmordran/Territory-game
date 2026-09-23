@@ -118,11 +118,15 @@
 
   function renderJustSignedIn(session) {
     contentEl.innerHTML = "";
-    contentEl.appendChild(el("div", "info-box", "Signed in as " + session.user.email + "."));
-    var toGame = el("a", "btn", "Back to the game");
+    contentEl.appendChild(el("div", "info-box", "Signed in as " + session.user.email + " — taking you back to the game…"));
+    var toGame = el("a", "btn", "Back to the game now");
     toGame.href = "/";
     toGame.style.alignSelf = "flex-start";
     contentEl.appendChild(toGame);
+    // Auto-redirect a beat after signing in, per Tyler: "when i log in just
+    // make it auto put you back into the homescreen after but logged in."
+    // The link above stays as a fallback for slow/blocked navigation.
+    setTimeout(function () { window.location.href = "/"; }, 900);
   }
 
   function renderForm() {
