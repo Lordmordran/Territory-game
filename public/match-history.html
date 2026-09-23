@@ -143,7 +143,10 @@
         <div class="eyebrow">Territory &amp; Economy</div>
         <h1 id="page-title">Match History</h1>
       </div>
-      <button id="refresh-btn" class="btn" hidden>Refresh</button>
+      <div style="display: flex; gap: 8px;">
+        <a href="/" class="btn">Back to the game</a>
+        <button id="refresh-btn" class="btn" hidden>Refresh</button>
+      </div>
     </div>
     <div class="tagline" id="tagline">Sign in to see your permanent match history.</div>
     <div id="account-row" class="account-row" hidden></div>
@@ -243,11 +246,11 @@
     loginLink.href = "/login.html";
     loginLink.style.alignSelf = "flex-start";
     card.appendChild(loginLink);
-    var backLink = el("a", null, "Back to the game");
-    backLink.href = "/";
-    backLink.style.fontSize = "11px";
-    backLink.style.color = "var(--ink-muted)";
-    card.appendChild(backLink);
+    // No separate "back to the game" link here anymore -- there's now a
+    // permanent one in the page header (see .head-row) that works whether
+    // you're signed in or out, which is the actual bug Tyler reported:
+    // "the battle log thing doesnt have a way to get back to the home
+    // screen unless you log out."
     contentEl.appendChild(card);
   }
 
