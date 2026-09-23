@@ -116,17 +116,39 @@
     contentEl.appendChild(logout);
   }
 
-  function renderJustSignedIn(session) {
+  // Guards against rendering this twice — the direct call right after a
+  // successful signInWithPassword() and the onAuthStateChange listener
+  // below both end up wanting to show it for the same login, and without
+  // this a second call would wipe the DOM and restart the countdown mid-tick.
+  var loginSuccessShown = false;
+
+  function renderLoginSuccess(session) {
+    if (loginSuccessShown) return;
+    loginSuccessShown = true;
     contentEl.innerHTML = "";
-    contentEl.appendChild(el("div", "info-box", "Signed in as " + session.user.email + " — taking you back to the game…"));
+    var successMsg = el("div", "info-box");
+    successMsg.innerHTML = "<strong>Login Successful</strong><br>Signed in as " + session.user.email + ".";
+    contentEl.appendChild(successMsg);
+
+    var countdownEl = el("div", null);
+    countdownEl.style.fontSize = "13px";
+    countdownEl.style.color = "var(--ink-muted)";
+    contentEl.appendChild(countdownEl);
+
     var toGame = el("a", "btn", "Back to the game now");
     toGame.href = "/";
     toGame.style.alignSelf = "flex-start";
     contentEl.appendChild(toGame);
-    // Auto-redirect a beat after signing in, per Tyler: "when i log in just
-    // make it auto put you back into the homescreen after but logged in."
-    // The link above stays as a fallback for slow/blocked navigation.
-    setTimeout(function () { window.location.href = "/"; }, 900);
+
+    // Per Tyler: "make it say 'Login Successful' and then like 'redirecting
+    // in 5' and then it counts down before going back down."
+    var secondsLeft = 5;
+    (function tick() {
+      countdownEl.textContent = "Redirecting in " + secondsLeft + "…";
+      if (secondsLeft <= 0) { window.location.href = "/"; return; }
+      secondsLeft -= 1;
+      setTimeout(tick, 1000);
+    })();
   }
 
   function renderForm() {
@@ -197,6 +219,13 @@
         return;
       }
       submitBtn.disabled = true;
+      // A visible loading state during the network round-trip — without this
+      // the form just sits there looking unchanged for however long the
+      // request takes, which is exactly what Tyler flagged as "does the old
+      // thing for a few seconds" before anything happens.
+      var loadingLabel = mode === "signin" ? "Logging in…" : mode === "signup" ? "Creating account…" : "Sending…";
+      var originalLabel = submitBtn.textContent;
+      submitBtn.textContent = loadingLabel;
       msgEl.innerHTML = "";
 
       var result;
@@ -207,25 +236,36 @@
       } else {
         result = await sb.auth.signInWithPassword({ email: email, password: password });
       }
+
+      // A successful sign-in (or a signup with confirmation off) already has
+      // its session right here in the response — render success immediately
+      // instead of waiting on the separate onAuthStateChange listener below,
+      // which is what was actually causing the perceived lag.
+      if (!result.error && result.data.session) {
+        renderLoginSuccess(result.data.session);
+        return;
+      }
+
       submitBtn.disabled = false;
+      submitBtn.textContent = originalLabel;
 
       if (result.error) {
         msgEl.appendChild(el("div", "error-box", result.error.message));
       } else if (mode === "reset") {
         msgEl.appendChild(el("div", "info-box", "Check your email for a reset link."));
       } else if (mode === "signup" && !result.data.session) {
-        // Only happens if email confirmation is turned on in Supabase — with
-        // it off, signUp returns a session immediately and the auth listener
-        // below takes over instead of this branch ever running.
+        // Only reached if email confirmation is turned back on in Supabase.
         msgEl.appendChild(el("div", "info-box", "Check your email to confirm your account, then log in."));
       }
-      // A successful sign-in (or a signup with confirmation off) fires
-      // onAuthStateChange below, which re-renders into the signed-in view.
     });
   }
 
+  // Fallback path for logins that don't go through the form above (a magic
+  // link or password-reset redirect landing back here with a session in the
+  // URL) — renderLoginSuccess's own guard means this is a no-op if the
+  // direct call in the submit handler already showed it for this session.
   sb.auth.onAuthStateChange(function (_event, session) {
-    if (session) renderJustSignedIn(session);
+    if (session) renderLoginSuccess(session);
   });
 
   sb.auth.getSession().then(function (res) {
