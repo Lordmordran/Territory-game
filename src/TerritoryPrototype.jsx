@@ -88,8 +88,8 @@ const BUILDING_DEFS = {
   },
   fishery: {
     id: "fishery", name: "Fishery", terrain: "water",
-    cost: { wood: 20 }, buildMs: 6000, produces: { resource: "food", rate: 0.5 }, requiresWorker: true,
-    icon: Anchor, desc: "Fishes the shallows. Must connect to your territory. +0.5 food/sec.",
+    cost: { wood: 20 }, buildMs: 6000, produces: { resource: "food", rate: 0.65 }, requiresWorker: true,
+    icon: Anchor, desc: "Fishes the shallows. Must connect to your territory. +0.65 food/sec.",
   },
   // One barracks building, trainable for any troop type — which one is a
   // per-tile choice (tile.building.trains), not fixed by the def. Defaults to
