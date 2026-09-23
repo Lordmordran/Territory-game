@@ -2348,26 +2348,31 @@ function homeButtonStyle(primary) {
 // shows current status: signed in (with a Log out button, no navigation
 // needed for that) or a plain link to the login page.
 function AuthPanel({ session, isAdmin, onSignOut }) {
-  const linkStyle = {
-    background: "transparent", border: "none", color: "var(--tp-ink-muted)",
-    fontSize: 11, fontFamily: SANS, textDecoration: "underline", cursor: "pointer", padding: 0,
+  // A real button, not underlined link text — same outline style as the
+  // secondary home-screen buttons (border + transparent fill), just more
+  // compact since this sits in the header next to the big title.
+  const authButtonStyle = {
+    display: "inline-flex", alignItems: "center", justifyContent: "center",
+    padding: "8px 16px", borderRadius: 7, fontFamily: SANS, fontSize: 12, fontWeight: 600,
+    cursor: "pointer", border: "1px solid var(--tp-border)", background: "transparent",
+    color: "var(--tp-ink)", textDecoration: "none",
   };
 
   if (session) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, fontSize: 11, color: "var(--tp-ink-muted)" }}>
-        <span>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+        <span style={{ fontSize: 11, color: "var(--tp-ink-muted)" }}>
           Signed in as {session.user.email}
           {isAdmin && <span style={{ marginLeft: 6, color: "var(--tp-accent)", fontWeight: 700 }}>· Admin</span>}
         </span>
-        <button onClick={onSignOut} style={linkStyle}>Log out</button>
+        <button onClick={onSignOut} style={authButtonStyle}>Log out</button>
       </div>
     );
   }
 
   return (
-    <a href="/login.html" style={linkStyle}>
-      Log in to save your match history
+    <a href="/login.html" style={authButtonStyle}>
+      Log in
     </a>
   );
 }
